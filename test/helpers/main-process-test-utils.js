@@ -23,6 +23,98 @@ function createIpcMainMock() {
   };
 }
 
+function createIpcRendererMock(options = {}) {
+  const listeners = new Map();
+
+  const ipcRenderer = {
+    listeners,
+    invoke: jest.fn((channel, ...args) => {
+      if (typeof options.invokeImplementation === 'function') {
+        return options.invokeImplementation(channel, ...args);
+      }
+
+      if (options.invokeResponses && channel in options.invokeResponses) {
+        return Promise.resolve(options.invokeResponses[channel]);
+      }
+
+      return Promise.resolve(undefined);
+    }),
+    send: jest.fn(),
+    sendSync: jest.fn((channel, ...args) => {
+      if (typeof options.sendSyncImplementation === 'function') {
+        return options.sendSyncImplementation(channel, ...args);
+      }
+
+      if (options.syncResponses && channel in options.syncResponses) {
+        return options.syncResponses[channel];
+      }
+
+      return undefined;
+    }),
+    on: jest.fn((channel, handler) => {
+      if (!listeners.has(channel)) {
+        listeners.set(channel, []);
+      }
+      listeners.get(channel).push(handler);
+      return ipcRenderer;
+    }),
+    removeListener: jest.fn((channel, handler) => {
+      const channelListeners = listeners.get(channel) || [];
+      listeners.set(
+        channel,
+        channelListeners.filter((listener) => listener !== handler)
+      );
+      return ipcRenderer;
+    }),
+    emit(channel, ...args) {
+      const channelListeners = listeners.get(channel) || [];
+      channelListeners.forEach((listener) => listener({}, ...args));
+    },
+  };
+
+  return ipcRenderer;
+}
+
+function createContextBridgeMock() {
+  const exposedValues = {};
+
+  return {
+    exposedValues,
+    exposeInMainWorld: jest.fn((key, value) => {
+      exposedValues[key] = value;
+    }),
+  };
+}
+
+function createAppMock(options = {}) {
+  const handlers = new Map();
+
+  return {
+    handlers,
+    isPackaged: options.isPackaged ?? false,
+    on: jest.fn((event, handler) => {
+      handlers.set(event, handler);
+    }),
+    emit(event, ...args) {
+      const handler = handlers.get(event);
+      if (!handler) return undefined;
+      return handler(...args);
+    },
+    getPath: jest.fn((name) => {
+      if (name === 'userData') {
+        return options.userDataDir ?? os.tmpdir();
+      }
+
+      if (options.appPaths?.[name]) {
+        return options.appPaths[name];
+      }
+
+      return path.join(os.tmpdir(), name);
+    }),
+    showAboutPanel: jest.fn(),
+  };
+}
+
 function createTempUserDataDir(prefix = 'freedom-test-') {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
@@ -35,30 +127,35 @@ function loadMainModule(modulePath, options = {}) {
   jest.resetModules();
 
   const ipcMain = options.ipcMain || createIpcMainMock();
-  const app = {
-    isPackaged: options.isPackaged ?? false,
-    getPath: jest.fn((name) => {
-      if (name === 'userData') {
-        return options.userDataDir ?? os.tmpdir();
-      }
-
-      if (options.appPaths?.[name]) {
-        return options.appPaths[name];
-      }
-
-      return path.join(os.tmpdir(), name);
-    }),
-  };
+  const ipcRenderer = options.ipcRenderer || createIpcRendererMock();
+  const contextBridge = options.contextBridge || createContextBridgeMock();
+  const app = options.app || createAppMock(options);
   const nativeTheme = options.nativeTheme || { themeSource: 'system' };
   const BrowserWindow = options.BrowserWindow || {
     getAllWindows: jest.fn(() => options.windows ?? []),
+  };
+  const dialog = options.dialog || { showSaveDialog: jest.fn() };
+  const clipboard = options.clipboard || {
+    writeText: jest.fn(),
+    writeImage: jest.fn(),
+  };
+  const nativeImage = options.nativeImage || {
+    createFromBuffer: jest.fn(() => ({
+      isEmpty: () => false,
+    })),
   };
 
   jest.doMock('electron', () => ({
     app,
     ipcMain,
+    ipcRenderer,
     nativeTheme,
     BrowserWindow,
+    contextBridge,
+    dialog,
+    clipboard,
+    nativeImage,
+    ...(options.electronOverrides || {}),
   }));
 
   if (options.extraMocks) {
@@ -73,13 +170,21 @@ function loadMainModule(modulePath, options = {}) {
     mod,
     app,
     ipcMain,
+    ipcRenderer,
     nativeTheme,
     BrowserWindow,
+    contextBridge,
+    dialog,
+    clipboard,
+    nativeImage,
   };
 }
 
 module.exports = {
+  createAppMock,
+  createContextBridgeMock,
   createIpcMainMock,
+  createIpcRendererMock,
   createTempUserDataDir,
   removeTempUserDataDir,
   loadMainModule,
