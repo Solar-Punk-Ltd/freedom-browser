@@ -36,6 +36,7 @@ let stepStampsBtn;
 
 let pollInterval = null;
 let cachedBeeWalletAddress = null;
+let lastEvaluation = null;
 
 /**
  * Return the Bee wallet address, preferring the canonical identity-derived
@@ -91,6 +92,7 @@ export function openPublishSetup() {
 export function closePublishSetup() {
   stopPolling();
   cachedBeeWalletAddress = null;
+  lastEvaluation = null;
   publishSetupScreen?.classList.add('hidden');
   walletState.identityView?.classList.remove('hidden');
 }
@@ -109,8 +111,8 @@ function stopPolling() {
 
 async function refreshChecklist() {
   try {
-    const steps = await evaluateSteps();
-    renderSteps(steps);
+    lastEvaluation = await evaluateSteps();
+    renderSteps(lastEvaluation);
   } catch (err) {
     console.error('[PublishSetup] Failed to refresh checklist:', err);
   }
@@ -444,8 +446,7 @@ async function handleSwitchToLightMode() {
 
 function handleFundXbzz() {
   // If main wallet already has xBZZ, send it to the Bee wallet
-  const mainXbzz = parseFloat(walletState.currentBalances[XBZZ_TOKEN_KEY]?.formatted || '0');
-  if (mainXbzz > 0) {
+  if (lastEvaluation?.mainWalletHasXbzz) {
     const recipient = getBeeWalletAddress();
     if (!recipient) {
       alert('Bee wallet address is not available yet.');
