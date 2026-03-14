@@ -11,35 +11,48 @@ const { Size, Duration } = require('@ethersphere/bee-js');
 const { getBee } = require('./swarm-service');
 const log = require('electron-log');
 
+const BUY_TIMEOUT_MS = 300000; // 5 minutes — chain tx can be slow
+
+function isPositiveNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
 /**
- * Normalize a bee-js batch object to the Freedom batch model.
+ * Normalize a bee-js PostageBatch to the Freedom batch model.
+ * Uses public bee-js class methods (toBytes, toSeconds) rather than
+ * private properties.
  */
 function normalizeBatch(batch) {
-  const sizeBytes = typeof batch.size?.bytes === 'number'
-    ? batch.size.bytes
-    : Number(batch.size ?? 0);
+  let sizeBytes = 0;
+  if (batch.size && typeof batch.size.toBytes === 'function') {
+    sizeBytes = batch.size.toBytes();
+  } else if (typeof batch.size === 'number') {
+    sizeBytes = batch.size;
+  }
 
-  const remainingBytes = typeof batch.remainingSize?.bytes === 'number'
-    ? batch.remainingSize.bytes
-    : Number(batch.remainingSize ?? 0);
+  let remainingBytes = 0;
+  if (batch.remainingSize && typeof batch.remainingSize.toBytes === 'function') {
+    remainingBytes = batch.remainingSize.toBytes();
+  } else if (typeof batch.remainingSize === 'number') {
+    remainingBytes = batch.remainingSize;
+  }
 
-  const usageRaw = typeof batch.usage === 'number'
-    ? batch.usage
-    : parseFloat(batch.usage ?? 0);
+  let ttlSeconds = 0;
+  if (batch.duration && typeof batch.duration.toSeconds === 'function') {
+    ttlSeconds = batch.duration.toSeconds();
+  } else if (typeof batch.duration === 'number') {
+    ttlSeconds = batch.duration;
+  }
 
-  const usagePercent = Math.round(usageRaw * 100);
-
-  const ttlSeconds = typeof batch.duration === 'number'
-    ? batch.duration
-    : Number(batch.duration ?? 0);
+  const usageRaw = typeof batch.usage === 'number' ? batch.usage : 0;
 
   return {
-    batchId: batch.batchID || batch.batchId || '',
+    batchId: batch.batchID || '',
     usable: batch.usable === true,
-    isMutable: batch.immutableFlag === false || batch.mutable === true || false,
+    isMutable: batch.immutableFlag === false,
     sizeBytes,
     remainingBytes,
-    usagePercent,
+    usagePercent: Math.round(usageRaw * 100),
     ttlSeconds,
   };
 }
@@ -71,13 +84,13 @@ async function getStorageCost(sizeGB, durationDays) {
 
 /**
  * Purchase a new postage batch.
- * Returns { success, batchId } or { success: false, error }.
  */
 async function buyStorage(sizeGB, durationDays) {
   const bee = getBee();
   const batchId = await bee.buyStorage(
     Size.fromGigabytes(sizeGB),
-    Duration.fromDays(durationDays)
+    Duration.fromDays(durationDays),
+    { timeout: BUY_TIMEOUT_MS }
   );
 
   log.info(`[StampService] Purchased batch ${batchId} (${sizeGB} GB, ${durationDays} days)`);
@@ -100,7 +113,7 @@ function registerSwarmIpc() {
 
   ipcMain.handle('swarm:get-storage-cost', async (_event, sizeGB, durationDays) => {
     try {
-      if (!sizeGB || sizeGB <= 0 || !durationDays || durationDays <= 0) {
+      if (!isPositiveNumber(sizeGB) || !isPositiveNumber(durationDays)) {
         return { success: false, error: 'Size and duration must be positive numbers' };
       }
       const cost = await getStorageCost(sizeGB, durationDays);
@@ -113,7 +126,7 @@ function registerSwarmIpc() {
 
   ipcMain.handle('swarm:buy-storage', async (_event, sizeGB, durationDays) => {
     try {
-      if (!sizeGB || sizeGB <= 0 || !durationDays || durationDays <= 0) {
+      if (!isPositiveNumber(sizeGB) || !isPositiveNumber(durationDays)) {
         return { success: false, error: 'Size and duration must be positive numbers' };
       }
       const batchId = await buyStorage(sizeGB, durationDays);
@@ -129,8 +142,5 @@ function registerSwarmIpc() {
 
 module.exports = {
   normalizeBatch,
-  getStamps,
-  getStorageCost,
-  buyStorage,
   registerSwarmIpc,
 };

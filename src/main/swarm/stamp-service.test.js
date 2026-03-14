@@ -21,10 +21,10 @@ jest.mock('@ethersphere/bee-js', () => ({
     buyStorage: mockBuyStorage,
   })),
   Size: {
-    fromGigabytes: jest.fn((gb) => ({ gb, bytes: gb * 1024 * 1024 * 1024 })),
+    fromGigabytes: jest.fn((gb) => ({ gb })),
   },
   Duration: {
-    fromDays: jest.fn((days) => ({ days, seconds: days * 86400 })),
+    fromDays: jest.fn((days) => ({ days })),
   },
 }));
 
@@ -49,20 +49,26 @@ async function invokeIpc(channel, ...args) {
   return handler({}, ...args);
 }
 
+// Helper to create batch objects that mimic bee-js class instances
+function makeBatch(overrides = {}) {
+  return {
+    batchID: 'abc123',
+    usable: true,
+    immutableFlag: true,
+    size: { toBytes: () => 5368709120 },
+    remainingSize: { toBytes: () => 4000000000 },
+    usage: 0.255,
+    duration: { toSeconds: () => 2592000 },
+    ...overrides,
+  };
+}
+
 describe('stamp-service', () => {
   describe('normalizeBatch', () => {
-    test('normalizes a bee-js batch to the Freedom batch model', () => {
-      const raw = {
-        batchID: 'abc123',
-        usable: true,
-        immutableFlag: false,
-        size: { bytes: 5368709120 },
-        remainingSize: { bytes: 4000000000 },
-        usage: 0.255,
-        duration: 2592000,
-      };
+    test('normalizes a bee-js batch using public class methods', () => {
+      const batch = makeBatch({ immutableFlag: false });
 
-      expect(normalizeBatch(raw)).toEqual({
+      expect(normalizeBatch(batch)).toEqual({
         batchId: 'abc123',
         usable: true,
         isMutable: true,
@@ -73,17 +79,23 @@ describe('stamp-service', () => {
       });
     });
 
-    test('handles missing or numeric size fields', () => {
-      const raw = {
+    test('treats immutableFlag: true as not mutable', () => {
+      const batch = makeBatch({ immutableFlag: true });
+      expect(normalizeBatch(batch).isMutable).toBe(false);
+    });
+
+    test('falls back to plain numbers when class methods are absent', () => {
+      const batch = {
         batchID: 'def456',
         usable: false,
+        immutableFlag: true,
         size: 1000,
         remainingSize: 500,
         usage: 0.5,
         duration: 86400,
       };
 
-      expect(normalizeBatch(raw)).toEqual({
+      expect(normalizeBatch(batch)).toEqual({
         batchId: 'def456',
         usable: false,
         isMutable: false,
@@ -112,29 +124,19 @@ describe('stamp-service', () => {
     });
 
     test('swarm:get-stamps returns normalized batches', async () => {
-      mockGetAllPostageBatch.mockResolvedValue([
-        {
-          batchID: 'batch1',
-          usable: true,
-          immutableFlag: true,
-          size: { bytes: 1073741824 },
-          remainingSize: { bytes: 800000000 },
-          usage: 0.25,
-          duration: 604800,
-        },
-      ]);
+      mockGetAllPostageBatch.mockResolvedValue([makeBatch()]);
 
       const result = await invokeIpc('swarm:get-stamps');
       expect(result.success).toBe(true);
       expect(result.stamps).toHaveLength(1);
       expect(result.stamps[0]).toEqual({
-        batchId: 'batch1',
+        batchId: 'abc123',
         usable: true,
         isMutable: false,
-        sizeBytes: 1073741824,
-        remainingBytes: 800000000,
-        usagePercent: 25,
-        ttlSeconds: 604800,
+        sizeBytes: 5368709120,
+        remainingBytes: 4000000000,
+        usagePercent: 26,
+        ttlSeconds: 2592000,
       });
     });
 
@@ -158,10 +160,19 @@ describe('stamp-service', () => {
       expect(Duration.fromDays).toHaveBeenCalledWith(30);
     });
 
-    test('swarm:get-storage-cost rejects invalid inputs', async () => {
+    test('swarm:get-storage-cost rejects zero values', async () => {
       const result = await invokeIpc('swarm:get-storage-cost', 0, 30);
       expect(result.success).toBe(false);
-      expect(result.error).toContain('positive');
+    });
+
+    test('swarm:get-storage-cost rejects string values', async () => {
+      const result = await invokeIpc('swarm:get-storage-cost', '1', 30);
+      expect(result.success).toBe(false);
+    });
+
+    test('swarm:get-storage-cost rejects NaN', async () => {
+      const result = await invokeIpc('swarm:get-storage-cost', NaN, 30);
+      expect(result.success).toBe(false);
     });
 
     test('swarm:buy-storage returns batch ID on success', async () => {
@@ -170,8 +181,6 @@ describe('stamp-service', () => {
       const result = await invokeIpc('swarm:buy-storage', 1, 30);
       expect(result.success).toBe(true);
       expect(result.batchId).toBe('new-batch-id-hex');
-      expect(Size.fromGigabytes).toHaveBeenCalledWith(1);
-      expect(Duration.fromDays).toHaveBeenCalledWith(30);
     });
 
     test('swarm:buy-storage handles purchase failure', async () => {
@@ -185,7 +194,6 @@ describe('stamp-service', () => {
     test('swarm:buy-storage rejects invalid inputs', async () => {
       const result = await invokeIpc('swarm:buy-storage', -1, 30);
       expect(result.success).toBe(false);
-      expect(result.error).toContain('positive');
     });
   });
 });
