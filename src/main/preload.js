@@ -301,6 +301,12 @@ contextBridge.exposeInMainWorld('wallet', {
   proxyRpc: (rpcUrl, method, params) => ipcRenderer.invoke('wallet:proxy-rpc', { rpcUrl, method, params }),
 });
 
+contextBridge.exposeInMainWorld('swarmNode', {
+  getStamps: () => ipcRenderer.invoke('swarm:get-stamps'),
+  getStorageCost: (sizeGB, durationDays) => ipcRenderer.invoke('swarm:get-storage-cost', sizeGB, durationDays),
+  buyStorage: (sizeGB, durationDays) => ipcRenderer.invoke('swarm:buy-storage', sizeGB, durationDays),
+});
+
 contextBridge.exposeInMainWorld('chainRegistry', {
   getChains: () => ipcRenderer.invoke('chain-registry:get-chains'),
   getTokens: (chainId) => ipcRenderer.invoke('chain-registry:get-tokens', chainId),

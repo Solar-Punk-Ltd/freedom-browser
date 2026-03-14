@@ -54,6 +54,7 @@ const { registerWalletIpc } = require('./wallet/wallet-ipc');
 const { registerChainRegistryIpc } = require('./chain-registry');
 const { registerRpcManagerIpc } = require('./wallet/rpc-manager');
 const { registerDappPermissionsIpc } = require('./wallet/dapp-permissions');
+const { registerSwarmIpc } = require('./swarm/stamp-service');
 const { registerGithubBridgeIpc, cleanupTempDirs } = require('./github-bridge');
 const { registerServiceRegistryIpc } = require('./service-registry');
 const { createMainWindow, setWindowTitle, getMainWindows } = require('./windows/mainWindow');
@@ -108,6 +109,7 @@ async function bootstrap() {
   registerChainRegistryIpc();
   registerRpcManagerIpc();
   registerDappPermissionsIpc();
+  registerSwarmIpc();
   registerRequestRewriter(defaultSession);
   allowInteractivePermissions(defaultSession);
   registerWebContentsHandlers();
