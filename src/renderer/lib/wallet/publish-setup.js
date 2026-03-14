@@ -12,6 +12,7 @@ import { openSend } from './send.js';
 import { openReceive } from './receive.js';
 import { normalizeSwarmMode } from './swarm-readiness.js';
 import { fetchBeeJson } from './bee-api.js';
+import { openStampManager } from './stamp-manager.js';
 import { createTab } from '../tabs.js';
 
 const GNOSIS_CHAIN_ID = 100;
@@ -466,7 +467,8 @@ function handleFundXbzz() {
 }
 
 function handleBuyStamps() {
-  alert('Buy Postage Stamps — coming soon.');
+  closePublishSetup();
+  openStampManager();
 }
 
 // ============================================

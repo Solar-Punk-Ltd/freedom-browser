@@ -13,6 +13,7 @@ import {
   normalizeSwarmMode,
 } from './swarm-readiness.js';
 import { openPublishSetup } from './publish-setup.js';
+import { openStampManager } from './stamp-manager.js';
 
 const SWARM_REFRESH_MS = 15000;
 
@@ -73,7 +74,7 @@ function setupNodeCards() {
   if (swarmSetupBtn) {
     swarmSetupBtn.addEventListener('click', (event) => {
       event.stopPropagation();
-      openPublishSetup();
+      handleSetupCtaClick();
     });
   }
 }
@@ -296,6 +297,16 @@ function updateSwarmSectionVisibility() {
   swarmBalancesGroup?.classList.toggle('hidden', isUltraLight);
 }
 
+let currentCtaTarget = 'setup'; // 'setup' or 'storage'
+
+function handleSetupCtaClick() {
+  if (currentCtaTarget === 'storage') {
+    openStampManager();
+  } else {
+    openPublishSetup();
+  }
+}
+
 function updateSwarmSetupCta() {
   const publishState = classifySwarmPublishState({
     beeStatus: state.currentBeeStatus,
@@ -309,31 +320,35 @@ function updateSwarmSetupCta() {
 
   const inspectOnly = state.registry?.bee?.mode === 'reused';
   const beeAvailable = state.currentBeeStatus === 'running' || state.currentBeeStatus === 'starting';
-  const showCta = publishState.key !== 'ready' && !inspectOnly && beeAvailable;
+  const isReady = publishState.key === 'ready';
+
+  // Show CTA when Bee is available and not an external node
+  const showCta = !inspectOnly && beeAvailable;
 
   if (swarmSetupCta) {
     swarmSetupCta.classList.toggle('hidden', !showCta);
   }
 
-  if (swarmSetupBtnLabel) {
-    if (publishState.key === 'browsing-only') {
-      swarmSetupBtnLabel.textContent = 'Set Up Publishing';
-    } else {
-      swarmSetupBtnLabel.textContent = 'Publishing Setup';
+  // Switch CTA between setup and storage management
+  if (isReady) {
+    currentCtaTarget = 'storage';
+    if (swarmSetupBtnLabel) swarmSetupBtnLabel.textContent = 'Manage Storage';
+    if (swarmSetupHint) swarmSetupHint.textContent = 'View batches and storage';
+  } else {
+    currentCtaTarget = 'setup';
+    if (swarmSetupBtnLabel) {
+      swarmSetupBtnLabel.textContent = publishState.key === 'browsing-only'
+        ? 'Set Up Publishing'
+        : 'Publishing Setup';
     }
-  }
-
-  if (swarmSetupHint) {
-    if (publishState.key === 'browsing-only') {
-      swarmSetupHint.textContent = 'Enable uploads and publishing';
-    } else if (publishState.key === 'no-usable-stamps') {
-      swarmSetupHint.textContent = 'Stamps needed to publish';
-    } else if (publishState.key === 'initializing') {
-      swarmSetupHint.textContent = 'Setup in progress';
-    } else if (publishState.key === 'error') {
-      swarmSetupHint.textContent = 'Check node status';
-    } else {
-      swarmSetupHint.textContent = '';
+    if (swarmSetupHint) {
+      const hints = {
+        'browsing-only': 'Enable uploads and publishing',
+        'no-usable-stamps': 'Stamps needed to publish',
+        'initializing': 'Setup in progress',
+        'error': 'Check node status',
+      };
+      swarmSetupHint.textContent = hints[publishState.key] || '';
     }
   }
 }

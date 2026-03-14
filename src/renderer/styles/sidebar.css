@@ -1842,6 +1842,175 @@
   font-family: var(--font-mono, monospace);
 }
 
+/* ============================================
+   Stamp Manager
+   ============================================ */
+
+.stamp-manager-intro {
+  margin: 0 0 16px 0;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.stamp-presets {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.stamp-preset-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.stamp-preset-btn:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.stamp-preset-btn.selected {
+  background: rgba(26, 115, 232, 0.1);
+  border-color: rgba(26, 115, 232, 0.4);
+}
+
+.stamp-preset-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.stamp-preset-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.stamp-preset-desc {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.stamp-cost-section {
+  margin-bottom: 16px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 8px;
+}
+
+.stamp-cost-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.stamp-cost-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.stamp-cost-value {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.stamp-cost-spinner {
+  font-size: 12px;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.stamp-balance-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.stamp-balance {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.stamp-purchase-btn {
+  width: 100%;
+  padding: 10px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+
+.stamp-purchase-btn:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.stamp-purchase-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.stamp-purchase-status {
+  margin-top: 12px;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: #ff9800;
+  background: rgba(255, 152, 0, 0.08);
+  border-radius: 6px;
+  line-height: 1.4;
+}
+
+.stamp-purchase-error {
+  margin-top: 12px;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--danger);
+  background: rgba(244, 67, 54, 0.08);
+  border-radius: 6px;
+  line-height: 1.4;
+}
+
+.stamp-retry-btn {
+  margin-top: 8px;
+  padding: 8px 16px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent);
+  background: rgba(26, 115, 232, 0.1);
+  border: 1px solid rgba(26, 115, 232, 0.25);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.stamp-retry-btn:hover {
+  background: rgba(26, 115, 232, 0.18);
+}
+
+[data-theme="light"] .stamp-preset-btn {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: rgba(0, 0, 0, 0.1);
+}
+
+[data-theme="light"] .stamp-preset-btn:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+[data-theme="light"] .stamp-cost-section {
+  background: rgba(0, 0, 0, 0.03);
+}
+
 .publish-step-btn {
   margin-top: 8px;
   padding: 6px 14px;

@@ -24,6 +24,7 @@ import { initReceive, closeReceive } from './wallet/receive.js';
 import { initWalletSettings, closeWalletSettings } from './wallet/wallet-settings.js';
 import { initCreateWallet, openCreateWallet, closeCreateWallet } from './wallet/create-wallet.js';
 import { initPublishSetup, closePublishSetup } from './wallet/publish-setup.js';
+import { initStampManager, closeStampManager } from './wallet/stamp-manager.js';
 
 // Re-export public API consumed by dapp-provider.js and index.js
 export { showDappConnect, updateConnectionBanner, showDappTxApproval, showDappSignApproval };
@@ -67,6 +68,7 @@ export function initWalletUi() {
   initWalletSettings(switchTab);
   initCreateWallet();
   initPublishSetup();
+  initStampManager();
 
   // Load chain registry (updates registeredTokens/registeredChains, then render)
   loadChainRegistry().then(() => {
@@ -307,6 +309,7 @@ function closeAllSubscreens() {
   closeWalletSettings();
   closeSend();
   closePublishSetup();
+  closeStampManager();
   closeRpcApiKeyScreen();
 }
 

@@ -1787,6 +1787,44 @@
                 </div>
               </div>
             </div>
+
+            <!-- Stamp Manager sub-screen -->
+            <div id="sidebar-stamp-manager" class="sidebar-subscreen hidden">
+              <div class="subscreen-header">
+                <button type="button" class="subscreen-back-btn" id="stamp-manager-back">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="15 18 9 12 15 6"/>
+                  </svg>
+                  <span>Back</span>
+                </button>
+                <h3 class="subscreen-title">Storage</h3>
+              </div>
+
+              <div class="subscreen-content">
+                <p class="stamp-manager-intro">Purchase a storage batch to publish content on Swarm.</p>
+
+                <div class="stamp-presets" id="stamp-presets">
+                  <!-- Preset buttons inserted dynamically -->
+                </div>
+
+                <div class="stamp-cost-section hidden" id="stamp-cost-display">
+                  <div class="stamp-cost-row">
+                    <span class="stamp-cost-label">Estimated cost</span>
+                    <span class="stamp-cost-spinner hidden" id="stamp-cost-spinner">Estimating&hellip;</span>
+                    <span class="stamp-cost-value hidden" id="stamp-cost-value">--</span>
+                  </div>
+                  <div class="stamp-balance-row">
+                    <span class="stamp-balance" id="stamp-balance">Balance: --</span>
+                  </div>
+                </div>
+
+                <button type="button" class="stamp-purchase-btn" id="stamp-purchase-btn" disabled>Buy Storage</button>
+
+                <div class="stamp-purchase-status hidden" id="stamp-purchase-status"></div>
+                <div class="stamp-purchase-error hidden" id="stamp-purchase-error"></div>
+                <button type="button" class="stamp-retry-btn hidden" id="stamp-retry-btn">Try Again</button>
+              </div>
+            </div>
           </div>
         </div>
       </aside>
