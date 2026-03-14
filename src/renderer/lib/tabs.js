@@ -642,12 +642,13 @@ const renderTabs = () => {
 // Create a new tab
 export const createTab = (url = null) => {
   const tabId = tabState.nextTabId++;
-  const targetUrl = url || homeUrl;
-  const webview = createWebview(tabId, targetUrl);
+  const isDirectUrl = !url || url.startsWith('http://') || url.startsWith('https://');
+  const webviewUrl = isDirectUrl ? (url || homeUrl) : homeUrl;
+  const webview = createWebview(tabId, webviewUrl);
 
   const tab = {
     id: tabId,
-    url: targetUrl,
+    url: url || homeUrl,
     title: 'New Tab',
     isLoading: false,
     webview,
@@ -659,6 +660,12 @@ export const createTab = (url = null) => {
 
   // Switch to the new tab
   switchTab(tabId, { isNewTab: true });
+
+  // For protocol URLs (ens://, bzz://, ipfs://, etc.), route through the
+  // URL resolution pipeline instead of setting webview src directly
+  if (!isDirectUrl && url && onLoadTarget) {
+    setTimeout(() => onLoadTarget(url), 50);
+  }
 
   pushDebug(`Created tab ${tabId}`);
   return tab;
