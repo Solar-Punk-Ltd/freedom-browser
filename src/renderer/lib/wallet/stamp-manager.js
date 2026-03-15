@@ -261,6 +261,7 @@ function showExtensionForm(card, batch, type) {
   presetRow.className = 'stamp-extend-presets';
 
   let selectedValue = null;
+  let extEstimationId = 0;
 
   presets.forEach((preset, i) => {
     const btn = document.createElement('button');
@@ -272,7 +273,8 @@ function showExtensionForm(card, batch, type) {
         b.classList.toggle('selected', j === i);
       });
       selectedValue = type === 'duration' ? preset.days : preset.gb;
-      estimateExtensionCost(form, batch.batchId, type, selectedValue);
+      extEstimationId++;
+      estimateExtensionCost(form, batch.batchId, type, selectedValue, extEstimationId, () => extEstimationId);
     });
     presetRow.appendChild(btn);
   });
@@ -311,7 +313,7 @@ function showExtensionForm(card, batch, type) {
   card.appendChild(form);
 }
 
-async function estimateExtensionCost(form, batchId, type, value) {
+async function estimateExtensionCost(form, batchId, type, value, thisId, getCurrentId) {
   const costEl = form.querySelector('[data-role="cost"]');
   const confirmBtn = form.querySelector('[data-role="confirm"]');
 
@@ -326,7 +328,7 @@ async function estimateExtensionCost(form, batchId, type, value) {
       ? await window.swarmNode?.getDurationExtensionCost(batchId, value)
       : await window.swarmNode?.getSizeExtensionCost(batchId, value);
 
-    if (!isOpen) return;
+    if (!isOpen || thisId !== getCurrentId()) return;
 
     if (result?.success) {
       if (costEl) costEl.textContent = `Cost: ${result.bzz} xBZZ`;
@@ -335,6 +337,7 @@ async function estimateExtensionCost(form, batchId, type, value) {
       if (costEl) costEl.textContent = result?.error || 'Failed to estimate cost.';
     }
   } catch (err) {
+    if (!isOpen || thisId !== getCurrentId()) return;
     if (costEl) costEl.textContent = err.message || 'Failed to estimate cost.';
   }
 }
@@ -348,7 +351,7 @@ async function executeExtension(form, batchId, type, value) {
     statusEl.textContent = type === 'duration'
       ? 'Extending duration\u2026'
       : 'Extending size\u2026';
-    statusEl.classList.remove('hidden');
+    statusEl.classList.remove('hidden', 'success', 'error');
   }
 
   try {
