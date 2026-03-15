@@ -66,6 +66,31 @@ contextBridge.exposeInMainWorld('freedomAPI', {
   syncRadicleRepo: guardInternal('syncRadicleRepo', (rid) =>
     ipcRenderer.invoke('radicle:syncRepo', rid)
   ),
+
+  // Swarm publishing (internal-only, path-based methods)
+  swarm: {
+    publishData: guardInternal('swarm.publishData', (data) =>
+      ipcRenderer.invoke('swarm:publish-data', data)
+    ),
+    publishFilePath: guardInternal('swarm.publishFilePath', (filePath) =>
+      ipcRenderer.invoke('swarm:publish-file', filePath)
+    ),
+    publishDirectoryPath: guardInternal('swarm.publishDirectoryPath', (dirPath) =>
+      ipcRenderer.invoke('swarm:publish-directory', dirPath)
+    ),
+    getUploadStatus: guardInternal('swarm.getUploadStatus', (tagUid) =>
+      ipcRenderer.invoke('swarm:get-upload-status', tagUid)
+    ),
+    getStamps: guardInternal('swarm.getStamps', () =>
+      ipcRenderer.invoke('swarm:get-stamps')
+    ),
+    pickFileForPublish: guardInternal('swarm.pickFileForPublish', () =>
+      ipcRenderer.invoke('swarm:pick-file')
+    ),
+    pickDirectoryForPublish: guardInternal('swarm.pickDirectoryForPublish', () =>
+      ipcRenderer.invoke('swarm:pick-directory')
+    ),
+  },
 });
 
 // ============================================

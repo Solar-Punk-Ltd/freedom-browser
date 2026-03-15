@@ -9,7 +9,7 @@
 const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
-const { ipcMain } = require('electron');
+const { ipcMain, dialog, BrowserWindow } = require('electron');
 const { getBee, selectBestBatch, toHex } = require('./swarm-service');
 const log = require('electron-log');
 
@@ -209,6 +209,40 @@ function registerPublishIpc() {
       return { success: true, ...status };
     } catch (err) {
       log.error('[PublishService] Failed to get upload status:', err.message);
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('swarm:pick-file', async () => {
+    try {
+      const win = BrowserWindow.getFocusedWindow();
+      const result = await dialog.showOpenDialog(win, {
+        properties: ['openFile'],
+        title: 'Select a file to publish',
+      });
+      if (result.canceled || !result.filePaths?.length) {
+        return { success: true, path: null };
+      }
+      return { success: true, path: result.filePaths[0] };
+    } catch (err) {
+      log.error('[PublishService] File picker failed:', err.message);
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('swarm:pick-directory', async () => {
+    try {
+      const win = BrowserWindow.getFocusedWindow();
+      const result = await dialog.showOpenDialog(win, {
+        properties: ['openDirectory'],
+        title: 'Select a folder to publish',
+      });
+      if (result.canceled || !result.filePaths?.length) {
+        return { success: true, path: null };
+      }
+      return { success: true, path: result.filePaths[0] };
+    } catch (err) {
+      log.error('[PublishService] Directory picker failed:', err.message);
       return { success: false, error: err.message };
     }
   });
