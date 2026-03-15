@@ -67,6 +67,11 @@ contextBridge.exposeInMainWorld('freedomAPI', {
     ipcRenderer.invoke('radicle:syncRepo', rid)
   ),
 
+  // Clipboard
+  copyText: guardInternal('copyText', (text) =>
+    ipcRenderer.invoke('clipboard:copy-text', text)
+  ),
+
   // Swarm publishing (internal-only, path-based methods)
   swarm: {
     publishData: guardInternal('swarm.publishData', (data) =>

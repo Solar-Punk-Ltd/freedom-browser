@@ -215,7 +215,7 @@ function registerPublishIpc() {
 
   ipcMain.handle('swarm:pick-file', async () => {
     try {
-      const win = BrowserWindow.getFocusedWindow();
+      const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
       const result = await dialog.showOpenDialog(win, {
         properties: ['openFile'],
         title: 'Select a file to publish',
@@ -232,7 +232,7 @@ function registerPublishIpc() {
 
   ipcMain.handle('swarm:pick-directory', async () => {
     try {
-      const win = BrowserWindow.getFocusedWindow();
+      const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
       const result = await dialog.showOpenDialog(win, {
         properties: ['openDirectory'],
         title: 'Select a folder to publish',

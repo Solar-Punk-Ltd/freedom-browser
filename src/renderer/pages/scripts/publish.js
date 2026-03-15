@@ -5,6 +5,7 @@
 const swarm = window.freedomAPI?.swarm;
 
 const PROGRESS_POLL_MS = 2000;
+const PROGRESS_TIMEOUT_MS = 600000; // 10 minutes max poll
 
 // DOM refs
 const statusBanner = document.getElementById('publish-status-banner');
@@ -37,26 +38,13 @@ let lastResult = null;
 // Init
 // ============================================
 
-async function init() {
+function init() {
   if (!swarm) {
     showBanner('Swarm publishing API is not available.', 'error');
     disableActions();
     return;
   }
 
-  // Check if stamps are available
-  try {
-    const stampsResult = await swarm.getStamps();
-    if (!stampsResult?.success || !stampsResult.stamps?.some((s) => s.usable)) {
-      showBanner('No usable postage stamps. Purchase stamps before publishing.', 'warn');
-      disableActions();
-      return;
-    }
-  } catch {
-    showBanner('Could not check stamp availability.', 'warn');
-  }
-
-  // Wire up actions
   publishFileBtn?.addEventListener('click', handlePublishFile);
   publishFolderBtn?.addEventListener('click', handlePublishFolder);
   publishTextBtn?.addEventListener('click', showTextInput);
@@ -78,6 +66,9 @@ async function init() {
       window.freedomAPI?.openInNewTab?.(lastResult.bzzUrl);
     }
   });
+
+  // Clean up polling on page unload
+  window.addEventListener('pagehide', () => stopProgressPoll());
 }
 
 // ============================================
@@ -119,6 +110,24 @@ function disableActions() {
 }
 
 // ============================================
+// Stamp check (deferred to publish time)
+// ============================================
+
+async function ensureStampsAvailable() {
+  try {
+    const result = await swarm.getStamps();
+    if (!result?.success || !result.stamps?.some((s) => s.usable)) {
+      showError('No usable postage stamps. Purchase stamps before publishing.');
+      return false;
+    }
+    return true;
+  } catch {
+    // Can't check — let the publish attempt proceed and fail if needed
+    return true;
+  }
+}
+
+// ============================================
 // Publish handlers
 // ============================================
 
@@ -126,6 +135,8 @@ async function handlePublishFile() {
   try {
     const picked = await swarm.pickFileForPublish();
     if (!picked?.success || !picked.path) return;
+
+    if (!(await ensureStampsAvailable())) return;
 
     showView('progress');
     setProgress('Uploading file\u2026', 0);
@@ -137,7 +148,6 @@ async function handlePublishFile() {
       return;
     }
 
-    // Poll for sync progress if we have a tag
     if (result.tagUid) {
       await pollProgress(result.tagUid, 'Syncing file\u2026');
     }
@@ -152,6 +162,8 @@ async function handlePublishFolder() {
   try {
     const picked = await swarm.pickDirectoryForPublish();
     if (!picked?.success || !picked.path) return;
+
+    if (!(await ensureStampsAvailable())) return;
 
     showView('progress');
     setProgress('Uploading folder\u2026', 0);
@@ -178,6 +190,8 @@ async function handlePublishText() {
   if (!text) return;
 
   try {
+    if (!(await ensureStampsAvailable())) return;
+
     showView('progress');
     setProgress('Publishing text\u2026', 0);
 
@@ -204,8 +218,16 @@ function setProgress(text, percent) {
 }
 
 async function pollProgress(tagUid, label) {
-  return new Promise((resolve) => {
+  const startTime = Date.now();
+
+  return new Promise((resolve, reject) => {
     const poll = async () => {
+      if (Date.now() - startTime > PROGRESS_TIMEOUT_MS) {
+        stopProgressPoll();
+        reject(new Error('Upload sync timed out.'));
+        return;
+      }
+
       try {
         const status = await swarm.getUploadStatus(tagUid);
         if (status?.success) {
@@ -256,16 +278,8 @@ function showError(message) {
 
 async function copyToClipboard(text) {
   if (!text) return;
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch {
-    // Fallback
-    const input = document.createElement('input');
-    input.value = text;
-    document.body.appendChild(input);
-    input.select();
-    document.execCommand('copy');
-    document.body.removeChild(input);
+  if (window.freedomAPI?.copyText) {
+    await window.freedomAPI.copyText(text);
   }
 }
 
