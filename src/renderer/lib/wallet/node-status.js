@@ -389,14 +389,24 @@ function updateSwarmSetupCta() {
   const inspectOnly = state.registry?.bee?.mode === 'reused';
   const beeRunning = state.currentBeeStatus === 'running';
   const isReady = publishState.key === 'ready';
-  const stateResolved = publishState.key !== 'initializing';
+  const isInitializing = publishState.key === 'initializing';
 
-  // Only show CTA when Bee is running, state is fully resolved, and not external
-  const showCta = !inspectOnly && beeRunning && stateResolved;
+  const showCta = !inspectOnly && beeRunning;
 
   if (swarmSetupCta) {
     swarmSetupCta.classList.toggle('hidden', !showCta);
   }
+
+  // During startup/sync, show a non-clickable status hint
+  if (isInitializing) {
+    currentCtaTarget = null;
+    if (swarmSetupBtn) swarmSetupBtn.disabled = true;
+    if (swarmSetupBtnLabel) swarmSetupBtnLabel.textContent = 'Checking node status\u2026';
+    if (swarmSetupHint) swarmSetupHint.textContent = '';
+    return;
+  }
+
+  if (swarmSetupBtn) swarmSetupBtn.disabled = false;
 
   // Switch CTA between setup and storage management
   if (isReady) {
