@@ -1434,6 +1434,47 @@ The node is fully operational and ready for stamp purchase. `currentPrice` from 
 
 After deploying a chequebook in light mode and observing `chequebookAddress: "0x5E4D..."`, we can confirm the chequebook address is stored in Bee's local statestore. The open question about whether this persists across mode switches (back to ultra-light and then to light again) remains untested but is likely yes, given that the statestore is persistent on disk.
 
+#### Chequebook funding vs postage stamps (2026-03-15)
+
+Live testing of a 250 MB file upload revealed continuous "chequebook out of funds" warnings in Bee's stdout:
+
+```
+"level"="warning" "logger"="node/accounting" "msg"="payment failure" "error"="call issue function: chequebook out of funds"
+```
+
+This exposed a critical distinction that the current publish setup checklist does not address:
+
+- **Postage stamps** (xBZZ spent on-chain via `buyStorage`): reserve storage space. Content is accepted and stored by the network. This is what the checklist's step 5 covers.
+- **Chequebook balance** (xBZZ deposited into the chequebook contract via `depositTokens`): pays peers for bandwidth — forwarding chunks during uploads and downloads. This is a separate balance that we never fund.
+
+The current flow sends xBZZ to the Bee wallet and uses it to buy stamps, but never deposits any into the chequebook. The chequebook was deployed with zero balance (confirmed: `/chequebook/balance` returned `totalBalance: 0, availableBalance: 0`).
+
+**Impact:**
+
+- Uploads still succeed because stamps cover storage acceptance
+- But the node cannot compensate relay peers for bandwidth
+- Peers may eventually throttle or deprioritize the node's traffic
+- For light nodes this is somewhat tolerated by the network, but larger uploads like the 250 MB test produced hundreds of payment failure warnings per minute
+- Downloads of published content may also be affected — the node can't pay peers for retrieving chunks
+
+**What Freedom should do:**
+
+The publish setup checklist should include chequebook funding as part of the path to full publish readiness. Two options:
+
+1. **Add a step to the existing checklist** (between "Acquire xBZZ" and "Purchase stamps"): "Fund chequebook" — deposits xBZZ from the Bee wallet into the chequebook contract. bee-js provides `bee.depositTokens(amount)` for this.
+
+2. **Automatically deposit a fraction of xBZZ into the chequebook** during the stamp purchase or node setup flow, so the user doesn't need to think about two separate xBZZ balances.
+
+Option 2 is better UX but requires deciding how much to deposit. A reasonable default might be 10-20% of the xBZZ balance, or a fixed minimum amount (e.g. 0.1 xBZZ).
+
+**Related bee-js methods:**
+
+- `bee.getChequebookBalance()` — returns `{ totalBalance, availableBalance }`
+- `bee.depositTokens(amount)` — deposits xBZZ from the wallet into the chequebook
+- `bee.withdrawTokens(amount)` — withdraws from chequebook back to wallet
+
+This should be addressed before shipping the publishing feature to users, as unfunded chequebooks will degrade network performance and may affect content retrievability.
+
 ## Open Questions And Research Directions
 
 ### Resolved
@@ -1462,6 +1503,7 @@ After deploying a chequebook in light mode and observing `chequebookAddress: "0x
 
 ### Still open from implementation
 
+- **Chequebook funding strategy**: should Freedom auto-deposit a fraction of xBZZ into the chequebook, add a manual checklist step, or show the chequebook balance in the stamp manager with a "Deposit" action? What's the right default deposit amount?
 - Should the stamp management UI show cost in xBZZ or also estimate in USD/EUR (via a price feed)?
 - Should `window.swarmNode` (internal renderer API) and `window.swarm` (page-facing provider) share the same IPC backend, or should the page-facing provider have its own permission-gated layer on top?
 - How should the `Bee` client instance handle Bee restarts? Should it detect connection loss and recreate, or rely on the service registry URL change?
@@ -1505,28 +1547,34 @@ Milestone 2a — publish service backend:
 - ~~Normalized upload result and tag status~~ — done
 - ~~IPC + preload exposure~~ — done
 
-### Next: Milestone 2b/c — publish UI and history
+Milestone 2b — publish utility UI:
+- ~~`freedom://publish` internal app page~~ — done
+- ~~File, folder, text publish via `freedomAPI.swarm.*`~~ — done
+- ~~Native file/directory picker via `swarm:pick-file` / `swarm:pick-directory`~~ — done
+- ~~Progress display with tag-based polling~~ — done
+- ~~Result display with bzz:// URL, copy, open in new tab~~ — done
+- ~~CSP, clipboard IPC, poll timeout, page unload cleanup~~ — done
 
-**WP2-B: Publish utility UI**
+### Priority: Chequebook funding
 
-1. New sidebar sub-screen "Publish" accessible from node card when publish-ready
-2. Three publish actions:
-   - "Publish File" → `dialog.showOpenDialog` from main process → `publishFile` IPC → show result
-   - "Publish Folder" → directory picker → `publishDirectory` IPC → show progress + result
-   - "Publish Text" → textarea → `publishData` IPC → show result
-3. Progress display: poll `getUploadStatus` for deferred uploads
-4. Result display: bzz:// URL (clickable, opens new tab), reference, copy buttons
-5. Add file picker IPC handler in main process (`dialog.showOpenDialog` / `dialog.showOpenDialog({ properties: ['openDirectory'] })`)
+Live testing revealed that uploads produce continuous "chequebook out of funds" warnings because the chequebook contract has zero xBZZ deposited. This must be addressed before shipping:
+
+1. Add `swarm:deposit-chequebook` and `swarm:get-chequebook-balance` IPC handlers (bee-js: `depositTokens`, `getChequebookBalance`)
+2. Either add a checklist step for chequebook funding, or auto-deposit a fraction of xBZZ during stamp purchase
+3. Show chequebook balance in the stamp manager alongside wallet balance
+4. Surface the "chequebook out of funds" state to the user rather than silently logging it
+
+### Next: Publish history and polish
 
 **WP2-C: Publish history**
 
 1. `src/main/swarm/publish-history.js`: persist recent publishes to JSON file
 2. Entry model: `{ reference, bzzUrl, type, name, timestamp, tagUid, batchIdUsed, status }`
-3. Status lifecycle: `uploading` → `syncing` → `completed` / `failed`
+3. Status lifecycle: `uploading` → `completed` / `failed`
 4. IPC: `swarm:get-publish-history`, `swarm:clear-publish-history`
-5. Preload: `window.swarmNode.getPublishHistory()`, `.clearPublishHistory()`
+5. Expose via `freedomAPI.swarm.getPublishHistory()`, `.clearPublishHistory()` in webview preload
 6. Auto-record on upload completion in publish-service
-7. Show in the publish utility UI as a recent publishes list
+7. Show in the `freedom://publish` page as a recent publishes list
 
 ### Later: Milestones 3-5
 
