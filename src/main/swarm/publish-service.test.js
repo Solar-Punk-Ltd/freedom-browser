@@ -37,11 +37,17 @@ jest.mock('electron-log', () => ({
 jest.mock('fs', () => ({
   existsSync: jest.fn(),
   statSync: jest.fn(),
-  readFileSync: jest.fn(),
+  createReadStream: jest.fn(() => ({ pipe: jest.fn(), on: jest.fn() })),
   readdirSync: jest.fn(),
 }));
 
+jest.mock('fs/promises', () => ({
+  readdir: jest.fn().mockResolvedValue([]),
+  stat: jest.fn().mockResolvedValue({ size: 0 }),
+}));
+
 const fs = require('fs');
+const fsp = require('fs/promises');
 const { normalizeUploadResult, normalizeTag, registerPublishIpc } = require('./publish-service');
 
 registerPublishIpc();
@@ -148,10 +154,11 @@ describe('publish-service', () => {
       expect(result.success).toBe(false);
     });
 
-    test('swarm:publish-file uploads from filesystem path', async () => {
+    test('swarm:publish-file uploads from filesystem path using stream', async () => {
+      const mockStream = { pipe: jest.fn(), on: jest.fn() };
       fs.existsSync.mockReturnValue(true);
       fs.statSync.mockReturnValue({ size: 5000, isDirectory: () => false });
-      fs.readFileSync.mockReturnValue(Buffer.from('file content'));
+      fs.createReadStream.mockReturnValue(mockStream);
       mockGetPostageBatches.mockResolvedValue([
         makeBatch('batch2', 1000000000, 86400),
       ]);
@@ -163,11 +170,12 @@ describe('publish-service', () => {
       const result = await invokeIpc('swarm:publish-file', '/tmp/test.txt');
       expect(result.success).toBe(true);
       expect(result.reference).toBe('fileref456');
+      expect(fs.createReadStream).toHaveBeenCalledWith('/tmp/test.txt');
       expect(mockUploadFile).toHaveBeenCalledWith(
         'batch2',
-        expect.any(Buffer),
+        mockStream,
         'test.txt',
-        expect.objectContaining({ pin: true, deferred: true })
+        expect.objectContaining({ pin: true, deferred: true, size: 5000 })
       );
     });
 
@@ -189,10 +197,11 @@ describe('publish-service', () => {
         if (p === '/tmp/site') return { isDirectory: () => true, size: 0 };
         return { size: 1000 };
       });
-      fs.readdirSync.mockReturnValue([
+      fsp.readdir.mockResolvedValue([
         { name: 'index.html', isDirectory: () => false, isFile: () => true },
         { name: 'style.css', isDirectory: () => false, isFile: () => true },
       ]);
+      fsp.stat.mockResolvedValue({ size: 1000 });
       mockGetPostageBatches.mockResolvedValue([
         makeBatch('batch3', 1000000000, 86400),
       ]);

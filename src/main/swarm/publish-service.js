@@ -7,26 +7,17 @@
  */
 
 const fs = require('fs');
+const fsp = require('fs/promises');
 const path = require('path');
 const { ipcMain } = require('electron');
-const { getBee, selectBestBatch } = require('./swarm-service');
+const { getBee, selectBestBatch, toHex } = require('./swarm-service');
 const log = require('electron-log');
-
-function batchIdToHex(value, fallback = '') {
-  if (value && typeof value.toHex === 'function') return value.toHex();
-  return String(value || fallback);
-}
-
-function referenceToHex(ref) {
-  if (ref && typeof ref.toHex === 'function') return ref.toHex();
-  return String(ref || '');
-}
 
 /**
  * Normalize an UploadResult to a Freedom publish result.
  */
 function normalizeUploadResult(result, batchIdUsed) {
-  const reference = referenceToHex(result.reference);
+  const reference = toHex(result.reference);
   return {
     reference,
     bzzUrl: reference ? `bzz://${reference}` : null,
@@ -88,14 +79,15 @@ async function publishFile(filePath, options = {}) {
     throw new Error('No usable postage batch available. Purchase stamps first.');
   }
 
-  const data = fs.readFileSync(filePath);
+  const stream = fs.createReadStream(filePath);
   const name = path.basename(filePath);
   const contentType = options.contentType || undefined;
 
-  const result = await bee.uploadFile(batchId, data, name, {
+  const result = await bee.uploadFile(batchId, stream, name, {
     pin: true,
     deferred: true,
     contentType,
+    size: stat.size,
     ...options.uploadOptions,
   });
 
@@ -109,19 +101,8 @@ async function publishFile(filePath, options = {}) {
 async function publishDirectory(dirPath, options = {}) {
   const bee = getBee();
 
-  // Estimate total size
-  let totalSize = 0;
-  const estimateDir = (dir) => {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        estimateDir(full);
-      } else if (entry.isFile()) {
-        totalSize += fs.statSync(full).size;
-      }
-    }
-  };
-  estimateDir(dirPath);
+  // Estimate total size (async to avoid blocking the event loop)
+  const totalSize = await estimateDirSize(dirPath);
 
   const batchId = options.batchId || await selectBestBatch(totalSize);
 
@@ -141,6 +122,24 @@ async function publishDirectory(dirPath, options = {}) {
   });
 
   return normalizeUploadResult(result, batchId);
+}
+
+/**
+ * Estimate total size of a directory tree without blocking the event loop.
+ */
+async function estimateDirSize(dirPath) {
+  let total = 0;
+  const entries = await fsp.readdir(dirPath, { withFileTypes: true });
+  for (const entry of entries) {
+    const full = path.join(dirPath, entry.name);
+    if (entry.isDirectory()) {
+      total += await estimateDirSize(full);
+    } else if (entry.isFile()) {
+      const stat = await fsp.stat(full);
+      total += stat.size;
+    }
+  }
+  return total;
 }
 
 /**

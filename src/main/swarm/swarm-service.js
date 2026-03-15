@@ -75,8 +75,17 @@ async function selectBestBatch(estimatedSizeBytes) {
   return id && typeof id.toHex === 'function' ? id.toHex() : String(id || '');
 }
 
+/**
+ * Convert a bee-js typed-bytes object (BatchId, Reference, etc.) to hex string.
+ */
+function toHex(value, fallback = '') {
+  if (value && typeof value.toHex === 'function') return value.toHex();
+  return String(value || fallback);
+}
+
 module.exports = {
   getBee,
   resetBeeClient,
   selectBestBatch,
+  toHex,
 };

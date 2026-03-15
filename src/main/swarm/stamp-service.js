@@ -8,7 +8,7 @@
 
 const { ipcMain } = require('electron');
 const { Size, Duration } = require('@ethersphere/bee-js');
-const { getBee } = require('./swarm-service');
+const { getBee, toHex } = require('./swarm-service');
 const log = require('electron-log');
 
 const BUY_TIMEOUT_MS = 300000; // 5 minutes — chain tx can be slow
@@ -17,10 +17,7 @@ function isPositiveNumber(value) {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
 }
 
-function batchIdToHex(value, fallback = '') {
-  if (value && typeof value.toHex === 'function') return value.toHex();
-  return String(value || fallback);
-}
+const batchIdToHex = toHex;
 
 /**
  * Normalize a bee-js PostageBatch to the Freedom batch model.
