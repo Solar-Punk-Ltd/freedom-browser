@@ -806,16 +806,16 @@
                   <div class="node-card-content" id="swarm-card-content">
                     <!-- Node Wallet -->
                     <div class="node-info-group" id="swarm-wallet-group">
-                      <div class="node-info-label-row">
+                      <div class="node-section-header">
                         <span class="node-info-label">Node Wallet</span>
-                        <button type="button" class="node-copy-btn" data-copy="swarm" title="Copy address">
+                        <code class="node-section-address" id="sidebar-swarm-id"></code>
+                        <button type="button" class="node-copy-btn-inline" data-copy="swarm" title="Copy address">
                           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
                             <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
                           </svg>
                         </button>
                       </div>
-                      <code class="node-info-address" id="sidebar-swarm-id"></code>
                       <div class="node-balance-row">
                         <span class="node-balance-symbol">xDAI</span>
                         <span class="node-balance-value" id="swarm-balance-xdai">--</span>
@@ -828,8 +828,16 @@
 
                     <!-- Chequebook -->
                     <div class="node-info-group hidden" id="swarm-chequebook-group">
-                      <span class="node-info-label">Chequebook</span>
-                      <code class="node-info-address" id="swarm-chequebook-address">--</code>
+                      <div class="node-section-header">
+                        <span class="node-info-label">Chequebook</span>
+                        <code class="node-section-address" id="swarm-chequebook-address">--</code>
+                        <button type="button" class="node-copy-btn-inline" id="swarm-chequebook-copy" title="Copy address">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                            <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+                          </svg>
+                        </button>
+                      </div>
                       <div class="node-balance-row">
                         <span class="node-balance-symbol">xBZZ</span>
                         <span class="node-balance-value" id="swarm-chequebook-balance">--</span>

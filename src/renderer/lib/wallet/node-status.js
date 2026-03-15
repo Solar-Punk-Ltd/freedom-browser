@@ -63,6 +63,15 @@ export function initNodeStatus() {
 
   setupNodeCards();
 
+  const chequebookCopyBtn = document.getElementById('swarm-chequebook-copy');
+  if (chequebookCopyBtn) {
+    chequebookCopyBtn.addEventListener('click', async () => {
+      if (chequebookFullAddress) {
+        await window.electronAPI?.copyText?.(chequebookFullAddress);
+      }
+    });
+  }
+
   syncDesiredSwarmMode();
   window.addEventListener('settings:updated', handleSettingsUpdated);
 
@@ -374,6 +383,8 @@ function updateSwarmWalletBalances(walletInfo) {
   }
 }
 
+let chequebookFullAddress = null;
+
 function updateSwarmChequebook(addrResult, balResult) {
   const addr = addrResult?.ok ? addrResult.data?.chequebookAddress : null;
   const isDeployed = addr && addr !== '0x0000000000000000000000000000000000000000' && addr.length > 2;
@@ -382,7 +393,12 @@ function updateSwarmChequebook(addrResult, balResult) {
     swarmChequebookGroup.classList.toggle('hidden', !isDeployed);
   }
 
-  if (!isDeployed) return;
+  if (!isDeployed) {
+    chequebookFullAddress = null;
+    return;
+  }
+
+  chequebookFullAddress = addr;
 
   if (swarmChequebookAddress) {
     const short = addr.length > 12
