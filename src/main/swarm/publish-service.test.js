@@ -125,11 +125,11 @@ describe('publish-service', () => {
       jest.clearAllMocks();
     });
 
-    test('swarm:publish-data uploads and returns normalized result', async () => {
+    test('swarm:publish-data uploads via uploadFile and returns normalized result', async () => {
       mockGetPostageBatches.mockResolvedValue([
         makeBatch('batch1', 1000000000, 86400),
       ]);
-      mockUploadData.mockResolvedValue({
+      mockUploadFile.mockResolvedValue({
         reference: makeRef('dataref123'),
         tagUid: 10,
       });
@@ -139,6 +139,12 @@ describe('publish-service', () => {
       expect(result.reference).toBe('dataref123');
       expect(result.bzzUrl).toBe('bzz://dataref123');
       expect(result.batchIdUsed).toBe('batch1');
+      expect(mockUploadFile).toHaveBeenCalledWith(
+        'batch1',
+        'hello world',
+        'data',
+        expect.objectContaining({ pin: true, deferred: false, contentType: 'text/plain' })
+      );
     });
 
     test('swarm:publish-data fails when no usable batch', async () => {

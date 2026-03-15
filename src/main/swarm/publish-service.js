@@ -58,9 +58,11 @@ async function publishData(data, options = {}) {
     throw new Error('No usable postage batch available. Purchase stamps first.');
   }
 
-  const result = await bee.uploadData(batchId, data, {
+  // Use uploadFile so the content gets a manifest and is browsable via bzz://
+  const result = await bee.uploadFile(batchId, data, options.name || 'data', {
     pin: true,
     deferred: false,
+    contentType: options.contentType || 'text/plain',
     ...options.uploadOptions,
   });
 
