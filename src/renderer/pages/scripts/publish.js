@@ -150,7 +150,7 @@ async function handlePublishFile() {
     }
 
     if (result.tagUid) {
-      await pollProgress(result.tagUid, 'Syncing file\u2026');
+      await pollProgress(result.tagUid, 'Sending file\u2026');
     }
 
     showResult(result);
@@ -178,7 +178,7 @@ async function handlePublishFolder() {
     }
 
     if (result.tagUid) {
-      await pollProgress(result.tagUid, 'Syncing folder\u2026');
+      await pollProgress(result.tagUid, 'Sending folder\u2026');
     }
 
     showResult(result);
@@ -226,7 +226,7 @@ async function pollProgress(tagUid, label) {
     const poll = async () => {
       if (Date.now() - startTime > PROGRESS_TIMEOUT_MS) {
         stopProgressPoll();
-        reject(new Error('Upload sync timed out.'));
+        reject(new Error('Upload timed out.'));
         return;
       }
 
