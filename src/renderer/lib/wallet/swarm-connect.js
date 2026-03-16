@@ -60,15 +60,20 @@ export function initSwarmConnect() {
   swarmPublishConfirmBtn = document.getElementById('swarm-publish-confirm');
 
   registerScreenHider(() => {
+    // Only reject if the screen was actually visible (not already hidden).
+    // hideAllSubscreens() fires all hiders — including this one — when
+    // showing a new screen, so we must not reject during that transition.
+    const wasVisible = swarmConnectScreen && !swarmConnectScreen.classList.contains('hidden');
     swarmConnectScreen?.classList.add('hidden');
-    if (swarmConnectPending) {
+    if (wasVisible && swarmConnectPending) {
       swarmConnectPending.reject({ code: 4001, message: 'User dismissed prompt' });
       swarmConnectPending = null;
     }
   });
   registerScreenHider(() => {
+    const wasVisible = swarmPublishScreen && !swarmPublishScreen.classList.contains('hidden');
     swarmPublishScreen?.classList.add('hidden');
-    if (swarmPublishPending) {
+    if (wasVisible && swarmPublishPending) {
       swarmPublishPending.reject({ code: 4001, message: 'User dismissed prompt' });
       swarmPublishPending = null;
     }
