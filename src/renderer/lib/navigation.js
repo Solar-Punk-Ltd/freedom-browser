@@ -739,6 +739,7 @@ const handleNavigationEvent = (event) => {
       updateBookmarkButtonVisibility();
   updateGithubBridgeIcon();
       updateProtocolIcon();
+      navState.addressBarSnapshot = addressInput.value;
       return;
     }
 
@@ -757,6 +758,7 @@ const handleNavigationEvent = (event) => {
       updateNavigationState();
       updateBookmarkButtonVisibility();
   updateGithubBridgeIcon();
+      navState.addressBarSnapshot = addressInput.value;
       return;
     }
 
@@ -773,6 +775,7 @@ const handleNavigationEvent = (event) => {
       updateBookmarkButtonVisibility();
   updateGithubBridgeIcon();
       updateProtocolIcon();
+      navState.addressBarSnapshot = addressInput.value;
       return;
     }
 
