@@ -25,7 +25,7 @@ const { ipcMain } = require('electron');
 const IPC = require('../../shared/ipc-channels');
 const { normalizeOrigin } = require('../../shared/origin-utils');
 const { getPermission } = require('./swarm-permissions');
-const { publishData } = require('./publish-service');
+const { publishData, publishFilesFromContent, getUploadStatus } = require('./publish-service');
 const { addEntry, updateEntry } = require('./publish-history');
 const { getBeeApiUrl } = require('../service-registry');
 const log = require('electron-log');
@@ -53,11 +53,13 @@ const KNOWN_METHODS = [
   'swarm_getUploadStatus',
 ];
 
-// Methods that will be implemented in WP3-D
-const STUBBED_METHODS = [
-  'swarm_publishFiles',
-  'swarm_getUploadStatus',
-];
+// Tag ownership: tagUid → origin. Session-scoped, not persisted.
+// Prevents cross-origin tag snooping via getUploadStatus.
+const tagOwnership = new Map();
+
+function clearTagOwnership() {
+  tagOwnership.clear();
+}
 
 /**
  * Execute a Swarm provider method.
@@ -98,14 +100,12 @@ async function executeSwarmMethod(method, params, origin) {
       return handlePublishData(params, normalizedOrigin);
     }
 
-    // Stubbed methods — not yet implemented (WP3-D)
-    if (STUBBED_METHODS.includes(method)) {
-      return {
-        error: {
-          ...ERRORS.UNSUPPORTED_METHOD,
-          message: `${method} is not yet implemented. Coming in a future update.`,
-        },
-      };
+    if (method === 'swarm_publishFiles') {
+      return handlePublishFiles(params, normalizedOrigin);
+    }
+
+    if (method === 'swarm_getUploadStatus') {
+      return handleGetUploadStatus(params, normalizedOrigin);
     }
 
     return { error: ERRORS.INTERNAL_ERROR };
@@ -160,16 +160,14 @@ async function handlePublishData(params, origin) {
     return { error: { ...ERRORS.INVALID_PARAMS, message: 'contentType is required', data: { reason: 'missing_content_type' } } };
   }
 
-  // Accept string, Buffer, Uint8Array, or ArrayBuffer.
-  // Normalize ArrayBuffer to Buffer so publishData receives a consistent type.
+  // Accept string or binary (Buffer, Uint8Array, ArrayBuffer, JSON-serialized Buffer).
   let payload = data;
   const isString = typeof payload === 'string';
-  if (!isString && payload instanceof ArrayBuffer) {
-    payload = Buffer.from(payload);
-  }
-  const isBuffer = Buffer.isBuffer(payload) || payload instanceof Uint8Array;
-  if (!isString && !isBuffer) {
-    return { error: { ...ERRORS.INVALID_PARAMS, message: 'data must be a string, Uint8Array, or ArrayBuffer', data: { reason: 'invalid_params' } } };
+  if (!isString) {
+    payload = normalizeBytes(payload);
+    if (!payload) {
+      return { error: { ...ERRORS.INVALID_PARAMS, message: 'data must be a string, Uint8Array, or ArrayBuffer', data: { reason: 'invalid_params' } } };
+    }
   }
 
   // Enforce size limit on decoded content
@@ -210,6 +208,188 @@ async function handlePublishData(params, origin) {
   } catch (err) {
     updateEntry(historyEntry.id, { status: 'failed' });
     log.error(`[SwarmProvider] publishData failed for ${origin}:`, err.message);
+    return { error: { ...ERRORS.INTERNAL_ERROR, message: err.message } };
+  }
+}
+
+/**
+ * Validate a virtual path for manifest inclusion.
+ * @returns {{ valid: boolean, message?: string }}
+ */
+function validateVirtualPath(p) {
+  if (typeof p !== 'string' || p.length === 0) {
+    return { valid: false, message: 'Path must be a non-empty string' };
+  }
+  if (p.length > 256) {
+    return { valid: false, message: 'Path exceeds 256 characters' };
+  }
+  if (p.includes('\\')) {
+    return { valid: false, message: 'Backslashes are not allowed' };
+  }
+  if (p.startsWith('/')) {
+    return { valid: false, message: 'Leading slash is not allowed' };
+  }
+  // Check for control characters and null bytes
+  for (let i = 0; i < p.length; i++) {
+    if (p.charCodeAt(i) < 32) {
+      return { valid: false, message: 'Control characters are not allowed' };
+    }
+  }
+  const segments = p.split('/');
+  for (const seg of segments) {
+    if (seg === '') {
+      return { valid: false, message: 'Empty path segments are not allowed' };
+    }
+    if (seg === '.' || seg === '..') {
+      return { valid: false, message: '"." and ".." segments are not allowed' };
+    }
+  }
+  return { valid: true };
+}
+
+/**
+ * Normalize bytes from IPC — handles Buffer, Uint8Array, ArrayBuffer,
+ * and the JSON-serialized { type: 'Buffer', data: [...] } form.
+ * Returns Buffer or null if invalid.
+ */
+function normalizeBytes(bytes) {
+  if (Buffer.isBuffer(bytes) || bytes instanceof Uint8Array) {
+    return Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+  }
+  if (bytes instanceof ArrayBuffer) {
+    return Buffer.from(bytes);
+  }
+  // IPC sometimes serializes Buffer as { type: 'Buffer', data: [...] }
+  if (bytes && typeof bytes === 'object' && bytes.type === 'Buffer' && Array.isArray(bytes.data)) {
+    return Buffer.from(bytes.data);
+  }
+  return null;
+}
+
+/**
+ * Handle swarm_publishFiles: validate, enforce limits, write to temp dir, publish.
+ */
+async function handlePublishFiles(params, origin) {
+  if (!params || typeof params !== 'object') {
+    return { error: { ...ERRORS.INVALID_PARAMS, message: 'params is required', data: { reason: 'invalid_params' } } };
+  }
+
+  const { files, indexDocument } = params;
+
+  if (!Array.isArray(files) || files.length === 0) {
+    return { error: { ...ERRORS.INVALID_PARAMS, message: 'files must be a non-empty array', data: { reason: 'empty_files' } } };
+  }
+
+  if (files.length > LIMITS.maxFileCount) {
+    return { error: { ...ERRORS.INVALID_PARAMS, message: `File count exceeds maximum of ${LIMITS.maxFileCount}`, data: { reason: 'too_many_files', limit: LIMITS.maxFileCount, actual: files.length } } };
+  }
+
+  const seenPaths = new Set();
+  let totalSize = 0;
+  const normalizedFiles = [];
+
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    if (!file || typeof file !== 'object') {
+      return { error: { ...ERRORS.INVALID_PARAMS, message: `files[${i}] is not a valid file object`, data: { reason: 'invalid_params' } } };
+    }
+
+    const pathResult = validateVirtualPath(file.path);
+    if (!pathResult.valid) {
+      return { error: { ...ERRORS.INVALID_PARAMS, message: `files[${i}].path: ${pathResult.message}`, data: { reason: 'invalid_path' } } };
+    }
+
+    if (seenPaths.has(file.path)) {
+      return { error: { ...ERRORS.INVALID_PARAMS, message: `Duplicate path: ${file.path}`, data: { reason: 'duplicate_path', path: file.path } } };
+    }
+    seenPaths.add(file.path);
+
+    const bytes = normalizeBytes(file.bytes);
+    if (!bytes) {
+      return { error: { ...ERRORS.INVALID_PARAMS, message: `files[${i}].bytes must be a Buffer, Uint8Array, or ArrayBuffer`, data: { reason: 'invalid_params' } } };
+    }
+
+    totalSize += bytes.length;
+    normalizedFiles.push({
+      path: file.path,
+      bytes,
+      contentType: typeof file.contentType === 'string' ? file.contentType : undefined,
+    });
+  }
+
+  if (totalSize > LIMITS.maxFilesBytes) {
+    return {
+      error: {
+        ...ERRORS.INVALID_PARAMS,
+        message: `Total size exceeds maximum of ${LIMITS.maxFilesBytes} bytes`,
+        data: { reason: 'payload_too_large', limit: LIMITS.maxFilesBytes, actual: totalSize },
+      },
+    };
+  }
+
+  if (indexDocument !== undefined && indexDocument !== null) {
+    if (typeof indexDocument !== 'string' || !seenPaths.has(indexDocument)) {
+      return { error: { ...ERRORS.INVALID_PARAMS, message: 'indexDocument must match an existing file path', data: { reason: 'invalid_index_document' } } };
+    }
+  }
+
+  const preFlight = await checkSwarmPreFlight();
+  if (!preFlight.ok) {
+    return { error: { ...ERRORS.NODE_UNAVAILABLE, message: `Node not available: ${preFlight.reason}`, data: { reason: preFlight.reason } } };
+  }
+
+  const historyEntry = addEntry({
+    type: 'directory',
+    name: indexDocument || `${normalizedFiles.length} files`,
+    status: 'uploading',
+  });
+
+  try {
+    const result = await publishFilesFromContent(normalizedFiles, { indexDocument });
+
+    if (result.tagUid) {
+      tagOwnership.set(result.tagUid, origin);
+    }
+
+    updateEntry(historyEntry.id, { status: 'completed', ...result });
+    log.info(`[SwarmProvider] publishFiles succeeded for ${origin}: ${result.bzzUrl} (${normalizedFiles.length} files)`);
+
+    return { result: { reference: result.reference, bzzUrl: result.bzzUrl, tagUid: result.tagUid } };
+  } catch (err) {
+    updateEntry(historyEntry.id, { status: 'failed' });
+    log.error(`[SwarmProvider] publishFiles failed for ${origin}:`, err.message);
+    return { error: { ...ERRORS.INTERNAL_ERROR, message: err.message } };
+  }
+}
+
+/**
+ * Handle swarm_getUploadStatus: origin-scoped tag progress query.
+ */
+async function handleGetUploadStatus(params, origin) {
+  if (!params || typeof params !== 'object') {
+    return { error: { ...ERRORS.INVALID_PARAMS, message: 'params is required', data: { reason: 'invalid_params' } } };
+  }
+
+  const { tagUid } = params;
+
+  if (typeof tagUid !== 'number' || !Number.isInteger(tagUid) || tagUid <= 0) {
+    return { error: { ...ERRORS.INVALID_PARAMS, message: 'tagUid must be a positive integer', data: { reason: 'invalid_params' } } };
+  }
+
+  const owner = tagOwnership.get(tagUid);
+  if (!owner || owner !== origin) {
+    return { error: { ...ERRORS.UNAUTHORIZED, message: 'Tag not found or not owned by this origin' } };
+  }
+
+  try {
+    const status = await getUploadStatus(tagUid);
+    // Clean up completed tags to prevent unbounded map growth
+    if (status.done) {
+      tagOwnership.delete(tagUid);
+    }
+    return { result: status };
+  } catch (err) {
+    log.error(`[SwarmProvider] getUploadStatus failed for tag ${tagUid}:`, err.message);
     return { error: { ...ERRORS.INTERNAL_ERROR, message: err.message } };
   }
 }
@@ -277,5 +457,7 @@ module.exports = {
   registerSwarmProviderIpc,
   executeSwarmMethod,
   checkSwarmPreFlight,
+  validateVirtualPath,
+  clearTagOwnership,
   LIMITS,
 };

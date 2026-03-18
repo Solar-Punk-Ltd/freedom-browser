@@ -71,7 +71,7 @@ async function handleSwarmRequest(webview, request) {
       const response = await window.swarmProvider.execute(method, params, permissionKey);
       if (response.error) throw response.error;
       result = response.result;
-    } else if (method === 'swarm_publishData') {
+    } else if (method === 'swarm_publishData' || method === 'swarm_publishFiles') {
       // Publish requires permission + per-publish user approval
       await requirePermission(permissionKey);
 

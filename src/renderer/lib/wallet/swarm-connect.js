@@ -30,6 +30,8 @@ let swarmPublishType;
 let swarmPublishSize;
 let swarmPublishNameRow;
 let swarmPublishName;
+let swarmPublishPathsRow;
+let swarmPublishPaths;
 let swarmPublishRejectBtn;
 let swarmPublishConfirmBtn;
 
@@ -56,6 +58,8 @@ export function initSwarmConnect() {
   swarmPublishSize = document.getElementById('swarm-publish-size');
   swarmPublishNameRow = document.getElementById('swarm-publish-name-row');
   swarmPublishName = document.getElementById('swarm-publish-name');
+  swarmPublishPathsRow = document.getElementById('swarm-publish-paths-row');
+  swarmPublishPaths = document.getElementById('swarm-publish-paths');
   swarmPublishRejectBtn = document.getElementById('swarm-publish-reject');
   swarmPublishConfirmBtn = document.getElementById('swarm-publish-confirm');
 
@@ -269,29 +273,57 @@ export function showSwarmPublishApproval(permissionKey, params, resolve, reject)
   if (swarmPublishSite) {
     swarmPublishSite.textContent = permissionKey || 'Unknown';
   }
-  if (swarmPublishType) {
-    swarmPublishType.textContent = params?.contentType || 'unknown';
-  }
-  if (swarmPublishSize) {
-    const data = params?.data;
-    let size = 0;
-    if (typeof data === 'string') {
-      size = new Blob([data]).size;
-    } else if (data instanceof ArrayBuffer) {
-      size = data.byteLength;
-    } else if (data?.length !== undefined) {
-      // Uint8Array or similar typed array
-      size = data.length;
+
+  const isFileMode = Array.isArray(params?.files);
+
+  if (isFileMode) {
+    // File mode: show file count, total size, path preview
+    const fileCount = params.files.length;
+    if (swarmPublishType) {
+      swarmPublishType.textContent = `${fileCount} file${fileCount !== 1 ? 's' : ''}`;
     }
-    swarmPublishSize.textContent = formatBytes(size);
-  }
-  if (swarmPublishNameRow && swarmPublishName) {
-    if (params?.name) {
-      swarmPublishName.textContent = params.name;
-      swarmPublishNameRow.classList.remove('hidden');
-    } else {
-      swarmPublishNameRow.classList.add('hidden');
+    if (swarmPublishSize) {
+      const totalSize = params.files.reduce((sum, f) => {
+        const b = f.bytes;
+        return sum + (b?.length || b?.byteLength || b?.data?.length || 0);
+      }, 0);
+      swarmPublishSize.textContent = formatBytes(totalSize);
     }
+    // Path preview: first 3 paths + "...and N more"
+    if (swarmPublishPathsRow && swarmPublishPaths) {
+      const paths = params.files.map((f) => f.path);
+      const preview = paths.slice(0, 3).join(', ');
+      const more = paths.length > 3 ? ` \u2026and ${paths.length - 3} more` : '';
+      swarmPublishPaths.textContent = preview + more;
+      swarmPublishPathsRow.classList.remove('hidden');
+    }
+    swarmPublishNameRow?.classList.add('hidden');
+  } else {
+    // Data mode: show content type, size, optional name
+    if (swarmPublishType) {
+      swarmPublishType.textContent = params?.contentType || 'unknown';
+    }
+    if (swarmPublishSize) {
+      const data = params?.data;
+      let size = 0;
+      if (typeof data === 'string') {
+        size = new Blob([data]).size;
+      } else if (data instanceof ArrayBuffer) {
+        size = data.byteLength;
+      } else if (data?.length !== undefined) {
+        size = data.length;
+      }
+      swarmPublishSize.textContent = formatBytes(size);
+    }
+    if (swarmPublishNameRow && swarmPublishName) {
+      if (params?.name) {
+        swarmPublishName.textContent = params.name;
+        swarmPublishNameRow.classList.remove('hidden');
+      } else {
+        swarmPublishNameRow.classList.add('hidden');
+      }
+    }
+    swarmPublishPathsRow?.classList.add('hidden');
   }
 
   hideAllSubscreens();

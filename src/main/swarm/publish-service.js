@@ -9,6 +9,7 @@
 const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
+const os = require('os');
 const { ipcMain, dialog, BrowserWindow } = require('electron');
 const { getBee, selectBestBatch, toHex } = require('./swarm-service');
 const { addEntry, updateEntry } = require('./publish-history');
@@ -119,18 +120,51 @@ async function publishDirectory(dirPath, options = {}) {
     throw new Error('No usable postage batch available. Purchase stamps first.');
   }
 
-  // Auto-detect index.html
-  const indexPath = path.join(dirPath, 'index.html');
-  const hasIndex = fs.existsSync(indexPath);
+  // Use explicit indexDocument if provided, otherwise auto-detect index.html
+  const indexDocument = options.indexDocument ||
+    (fs.existsSync(path.join(dirPath, 'index.html')) ? 'index.html' : undefined);
 
   const result = await bee.uploadFilesFromDirectory(batchId, dirPath, {
     pin: true,
     deferred: true,
-    indexDocument: hasIndex ? 'index.html' : undefined,
+    indexDocument,
     ...options.uploadOptions,
   });
 
   return normalizeUploadResult(result, batchId);
+}
+
+/**
+ * Publish a collection of in-memory files as a Swarm directory manifest.
+ * Writes files to a temp directory, delegates to publishDirectory, cleans up.
+ *
+ * Note: per-file contentType is accepted in the file objects but not currently
+ * applied — bee-js uploadFilesFromDirectory infers MIME types from extensions.
+ * Files with non-standard names should use appropriate extensions.
+ *
+ * @param {Array<{path: string, bytes: Buffer, contentType?: string}>} files
+ * @param {{ indexDocument?: string }} options
+ */
+async function publishFilesFromContent(files, options = {}) {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'freedom-swarm-publish-'));
+
+  try {
+    for (const file of files) {
+      const filePath = path.join(tempDir, file.path);
+      await fsp.mkdir(path.dirname(filePath), { recursive: true });
+      await fsp.writeFile(filePath, file.bytes);
+    }
+
+    return await publishDirectory(tempDir, {
+      indexDocument: options.indexDocument,
+    });
+  } finally {
+    try {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    } catch (err) {
+      log.error('[PublishService] Failed to clean up temp dir:', err.message);
+    }
+  }
 }
 
 /**
@@ -276,6 +310,7 @@ module.exports = {
   publishData,
   publishFile,
   publishDirectory,
+  publishFilesFromContent,
   getUploadStatus,
   registerPublishIpc,
 };

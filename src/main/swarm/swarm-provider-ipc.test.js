@@ -24,8 +24,12 @@ jest.mock('../service-registry', () => ({
 }));
 
 const mockPublishData = jest.fn();
+const mockPublishFilesFromContent = jest.fn();
+const mockGetUploadStatus = jest.fn();
 jest.mock('./publish-service', () => ({
   publishData: mockPublishData,
+  publishFilesFromContent: mockPublishFilesFromContent,
+  getUploadStatus: mockGetUploadStatus,
 }));
 
 const mockAddEntry = jest.fn().mockReturnValue({ id: 'test-id' });
@@ -38,7 +42,7 @@ jest.mock('./publish-history', () => ({
 // Mock global fetch for pre-flight checks
 global.fetch = jest.fn();
 
-const { registerSwarmProviderIpc, executeSwarmMethod, checkSwarmPreFlight, LIMITS } = require('./swarm-provider-ipc');
+const { registerSwarmProviderIpc, executeSwarmMethod, checkSwarmPreFlight, validateVirtualPath, clearTagOwnership, LIMITS } = require('./swarm-provider-ipc');
 
 registerSwarmProviderIpc();
 
@@ -344,23 +348,232 @@ describe('swarm-provider-ipc', () => {
     });
   });
 
-  describe('stubbed methods', () => {
-    test('swarm_publishFiles returns 4200 not yet implemented', async () => {
+  describe('swarm_publishFiles', () => {
+    function mockPreFlightOk() {
+      mockGetBeeApiUrl.mockReturnValue('http://127.0.0.1:1633');
+      global.fetch
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ beeMode: 'light' }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ status: 'ready' }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ stamps: [{ usable: true }] }) });
+    }
+
+    function makeFiles(paths) {
+      return paths.map((p) => ({ path: p, bytes: Buffer.from('content') }));
+    }
+
+    test('publishes files and returns reference + bzzUrl + tagUid', async () => {
       mockGetPermission.mockReturnValue({ origin: 'myapp.eth' });
-      const result = await invokeProvider('swarm_publishFiles', {}, 'myapp.eth');
-      expect(result.error.code).toBe(4200);
+      mockPreFlightOk();
+      mockPublishFilesFromContent.mockResolvedValue({
+        reference: 'site123',
+        bzzUrl: 'bzz://site123',
+        tagUid: 42,
+        batchIdUsed: 'batch1',
+      });
+
+      const result = await invokeProvider('swarm_publishFiles', {
+        files: makeFiles(['index.html', 'style.css']),
+        indexDocument: 'index.html',
+      }, 'myapp.eth');
+
+      expect(result.result).toEqual({ reference: 'site123', bzzUrl: 'bzz://site123', tagUid: 42 });
+      expect(mockPublishFilesFromContent).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          expect.objectContaining({ path: 'index.html' }),
+          expect.objectContaining({ path: 'style.css' }),
+        ]),
+        { indexDocument: 'index.html' }
+      );
     });
 
-    test('swarm_getUploadStatus returns 4200 not yet implemented', async () => {
+    test('rejects empty files array', async () => {
       mockGetPermission.mockReturnValue({ origin: 'myapp.eth' });
-      const result = await invokeProvider('swarm_getUploadStatus', {}, 'myapp.eth');
-      expect(result.error.code).toBe(4200);
+      const result = await invokeProvider('swarm_publishFiles', { files: [] }, 'myapp.eth');
+      expect(result.error.code).toBe(-32602);
+      expect(result.error.data.reason).toBe('empty_files');
     });
 
-    test('stubbed methods require permission', async () => {
+    test('rejects too many files', async () => {
+      mockGetPermission.mockReturnValue({ origin: 'myapp.eth' });
+      const files = Array.from({ length: 101 }, (_, i) => ({ path: `file${i}.txt`, bytes: Buffer.from('x') }));
+      const result = await invokeProvider('swarm_publishFiles', { files }, 'myapp.eth');
+      expect(result.error.code).toBe(-32602);
+      expect(result.error.data.reason).toBe('too_many_files');
+    });
+
+    test('rejects duplicate paths', async () => {
+      mockGetPermission.mockReturnValue({ origin: 'myapp.eth' });
+      const result = await invokeProvider('swarm_publishFiles', {
+        files: makeFiles(['index.html', 'index.html']),
+      }, 'myapp.eth');
+      expect(result.error.code).toBe(-32602);
+      expect(result.error.data.reason).toBe('duplicate_path');
+    });
+
+    test('rejects total size exceeding limit', async () => {
+      mockGetPermission.mockReturnValue({ origin: 'myapp.eth' });
+      const bigFile = { path: 'big.bin', bytes: Buffer.alloc(LIMITS.maxFilesBytes + 1) };
+      const result = await invokeProvider('swarm_publishFiles', { files: [bigFile] }, 'myapp.eth');
+      expect(result.error.code).toBe(-32602);
+      expect(result.error.data.reason).toBe('payload_too_large');
+    });
+
+    test('rejects invalid indexDocument', async () => {
+      mockGetPermission.mockReturnValue({ origin: 'myapp.eth' });
+      const result = await invokeProvider('swarm_publishFiles', {
+        files: makeFiles(['page.html']),
+        indexDocument: 'nonexistent.html',
+      }, 'myapp.eth');
+      expect(result.error.code).toBe(-32602);
+      expect(result.error.data.reason).toBe('invalid_index_document');
+    });
+
+    test('rejects without permission', async () => {
       mockGetPermission.mockReturnValue(null);
-      const result = await invokeProvider('swarm_publishFiles', {}, 'unauthorized.eth');
+      const result = await invokeProvider('swarm_publishFiles', {
+        files: makeFiles(['index.html']),
+      }, 'unauthorized.eth');
       expect(result.error.code).toBe(4100);
+    });
+
+    test('rejects when node is stopped', async () => {
+      mockGetPermission.mockReturnValue({ origin: 'myapp.eth' });
+      mockGetBeeApiUrl.mockReturnValue(null);
+      const result = await invokeProvider('swarm_publishFiles', {
+        files: makeFiles(['index.html']),
+      }, 'myapp.eth');
+      expect(result.error.code).toBe(4900);
+    });
+
+    test('records failed history on publish error', async () => {
+      mockGetPermission.mockReturnValue({ origin: 'myapp.eth' });
+      mockPreFlightOk();
+      mockPublishFilesFromContent.mockRejectedValue(new Error('Upload failed'));
+
+      const result = await invokeProvider('swarm_publishFiles', {
+        files: makeFiles(['index.html']),
+      }, 'myapp.eth');
+      expect(result.error.code).toBe(-32603);
+      expect(mockUpdateEntry).toHaveBeenCalledWith('test-id', { status: 'failed' });
+    });
+  });
+
+  describe('validateVirtualPath', () => {
+    test('accepts valid paths', () => {
+      expect(validateVirtualPath('index.html').valid).toBe(true);
+      expect(validateVirtualPath('assets/style.css').valid).toBe(true);
+      expect(validateVirtualPath('deep/nested/path/file.txt').valid).toBe(true);
+    });
+
+    test('rejects backslashes', () => {
+      expect(validateVirtualPath('path\\file.txt').valid).toBe(false);
+    });
+
+    test('rejects .. segments', () => {
+      expect(validateVirtualPath('../etc/passwd').valid).toBe(false);
+      expect(validateVirtualPath('assets/../secret').valid).toBe(false);
+    });
+
+    test('rejects . segments', () => {
+      expect(validateVirtualPath('./file.txt').valid).toBe(false);
+    });
+
+    test('rejects leading slash', () => {
+      expect(validateVirtualPath('/index.html').valid).toBe(false);
+    });
+
+    test('rejects empty segments', () => {
+      expect(validateVirtualPath('foo//bar.txt').valid).toBe(false);
+    });
+
+    test('rejects empty string', () => {
+      expect(validateVirtualPath('').valid).toBe(false);
+    });
+
+    test('rejects path over 256 chars', () => {
+      expect(validateVirtualPath('a'.repeat(257)).valid).toBe(false);
+    });
+
+    test('rejects null bytes', () => {
+      expect(validateVirtualPath('file\x00.txt').valid).toBe(false);
+    });
+
+    test('rejects control characters', () => {
+      expect(validateVirtualPath('file\x01.txt').valid).toBe(false);
+    });
+  });
+
+  describe('normalizeBytes via publishFiles', () => {
+    function mockPreFlightOk() {
+      mockGetBeeApiUrl.mockReturnValue('http://127.0.0.1:1633');
+      global.fetch
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ beeMode: 'light' }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ status: 'ready' }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ stamps: [{ usable: true }] }) });
+    }
+
+    test('normalizes JSON-serialized Buffer bytes', async () => {
+      mockGetPermission.mockReturnValue({ origin: 'myapp.eth' });
+      mockPreFlightOk();
+      mockPublishFilesFromContent.mockResolvedValue({
+        reference: 'r1', bzzUrl: 'bzz://r1', tagUid: 1, batchIdUsed: 'b1',
+      });
+
+      await invokeProvider('swarm_publishFiles', {
+        files: [{ path: 'test.txt', bytes: { type: 'Buffer', data: [104, 105] } }],
+      }, 'myapp.eth');
+
+      const calledFiles = mockPublishFilesFromContent.mock.calls[0][0];
+      expect(Buffer.isBuffer(calledFiles[0].bytes)).toBe(true);
+      expect(calledFiles[0].bytes.toString()).toBe('hi');
+    });
+  });
+
+  describe('swarm_getUploadStatus', () => {
+    beforeEach(() => {
+      clearTagOwnership();
+    });
+
+    test('returns status for owned tag', async () => {
+      mockGetPermission.mockReturnValue({ origin: 'myapp.eth' });
+      mockGetBeeApiUrl.mockReturnValue('http://127.0.0.1:1633');
+      global.fetch
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ beeMode: 'light' }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ status: 'ready' }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ stamps: [{ usable: true }] }) });
+      mockPublishFilesFromContent.mockResolvedValue({
+        reference: 'ref1', bzzUrl: 'bzz://ref1', tagUid: 99, batchIdUsed: 'b1',
+      });
+
+      // First publish to create tag ownership
+      await invokeProvider('swarm_publishFiles', {
+        files: [{ path: 'test.txt', bytes: Buffer.from('hi') }],
+      }, 'myapp.eth');
+
+      // Now query status
+      mockGetUploadStatus.mockResolvedValue({
+        tagUid: 99, split: 10, sent: 5, progress: 50, done: false,
+      });
+      const result = await invokeProvider('swarm_getUploadStatus', { tagUid: 99 }, 'myapp.eth');
+      expect(result.result).toEqual({ tagUid: 99, split: 10, sent: 5, progress: 50, done: false });
+    });
+
+    test('rejects unowned tag', async () => {
+      mockGetPermission.mockReturnValue({ origin: 'other.eth' });
+      const result = await invokeProvider('swarm_getUploadStatus', { tagUid: 99 }, 'other.eth');
+      expect(result.error.code).toBe(4100);
+    });
+
+    test('rejects invalid tagUid', async () => {
+      mockGetPermission.mockReturnValue({ origin: 'myapp.eth' });
+      const result = await invokeProvider('swarm_getUploadStatus', { tagUid: 'abc' }, 'myapp.eth');
+      expect(result.error.code).toBe(-32602);
+    });
+
+    test('rejects negative tagUid', async () => {
+      mockGetPermission.mockReturnValue({ origin: 'myapp.eth' });
+      const result = await invokeProvider('swarm_getUploadStatus', { tagUid: -1 }, 'myapp.eth');
+      expect(result.error.code).toBe(-32602);
     });
   });
 
