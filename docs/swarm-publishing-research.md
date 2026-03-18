@@ -1806,7 +1806,7 @@ Request:
     {
       path: string,             // Virtual path in manifest, e.g. 'index.html', 'assets/style.css'
       bytes: Uint8Array,        // Raw file content
-      contentType?: string,     // Optional MIME type (auto-detected from path extension if omitted)
+      contentType?: string,     // Advisory — accepted but currently not applied (bee-js infers from file extension). Preserved for forward compatibility.
     },
   ],
   indexDocument?: string,       // Path to use as website entry point, e.g. 'index.html'
