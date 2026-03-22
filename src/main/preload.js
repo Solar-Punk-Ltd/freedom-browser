@@ -372,6 +372,7 @@ contextBridge.exposeInMainWorld('swarmProvider', {
 
 contextBridge.exposeInMainWorld('swarmFeedStore', {
   hasFeedIdentity: (origin) => ipcRenderer.invoke('swarm:has-feed-identity', origin),
+  hasFeedGrant: (origin) => ipcRenderer.invoke('swarm:has-feed-grant', origin),
   setFeedIdentity: (origin, identityMode) => ipcRenderer.invoke('swarm:set-feed-identity', origin, identityMode),
   revokeFeedAccess: (origin) => ipcRenderer.invoke('swarm:revoke-feed-access', origin),
 });

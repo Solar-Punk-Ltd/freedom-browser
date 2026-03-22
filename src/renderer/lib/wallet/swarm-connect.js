@@ -451,7 +451,7 @@ function closeSwarmFeedApproval() {
 async function approveSwarmFeed() {
   if (!swarmFeedPending) return;
 
-  const { permissionKey, resolve } = swarmFeedPending;
+  const { permissionKey, resolve, reject } = swarmFeedPending;
 
   const selectedRadio = document.querySelector('input[name="swarm-feed-identity"]:checked');
   const identityMode = selectedRadio?.value || 'app-scoped';
@@ -462,6 +462,7 @@ async function approveSwarmFeed() {
     console.log('[SwarmConnect] Feed access approved:', permissionKey, 'mode:', identityMode);
   } catch (err) {
     console.error('[SwarmConnect] Failed to set feed identity:', err);
+    reject({ code: -32603, message: err.message || 'Failed to set feed identity' });
   }
 }
 

@@ -86,8 +86,8 @@ async function handleSwarmRequest(webview, request) {
       // Feed creation requires permission + feed grant (first time triggers prompt)
       await requirePermission(permissionKey);
 
-      const hasFeedGrant = await window.swarmFeedStore?.hasFeedIdentity?.(permissionKey);
-      if (!hasFeedGrant) {
+      const hasFeedAccess = await window.swarmFeedStore?.hasFeedGrant?.(permissionKey);
+      if (!hasFeedAccess) {
         // First feed operation — show identity choice prompt
         await new Promise((resolve, reject) => {
           showSwarmFeedApproval(permissionKey, params, resolve, reject);

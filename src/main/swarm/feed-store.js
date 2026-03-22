@@ -279,6 +279,10 @@ function registerFeedStoreIpc() {
     return hasIdentityMode(origin);
   });
 
+  ipcMain.handle(IPC.SWARM_HAS_FEED_GRANT, (_event, origin) => {
+    return hasFeedGrant(origin);
+  });
+
   // Idempotent for identity: if the origin already has an identity mode set,
   // return the existing entry without allocating a new key index.
   // Always grants feed access (feedGranted = true).
