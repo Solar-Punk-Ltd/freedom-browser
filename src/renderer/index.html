@@ -2008,6 +2008,67 @@
               </div>
             </div>
 
+            <!-- Swarm Feed Approval sub-screen -->
+            <div id="sidebar-swarm-feed-approve" class="sidebar-subscreen sidebar-modal hidden">
+              <div class="subscreen-header">
+                <button type="button" class="subscreen-back-btn" id="swarm-feed-back">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="15 18 9 12 15 6"/>
+                  </svg>
+                  <span>Back</span>
+                </button>
+                <h3 class="subscreen-title">Feed Access</h3>
+              </div>
+
+              <div class="subscreen-content">
+                <div class="swarm-connect-origin">
+                  <div class="swarm-connect-site" id="swarm-feed-site">site.eth</div>
+                  <div class="swarm-connect-wants">wants to create and manage feeds</div>
+                </div>
+
+                <div class="swarm-publish-details">
+                  <div class="swarm-publish-row">
+                    <span class="swarm-publish-label">Feed name</span>
+                    <span class="swarm-publish-value" id="swarm-feed-name">blog</span>
+                  </div>
+                </div>
+
+                <div class="swarm-feed-identity-choice">
+                  <div class="swarm-feed-identity-title">Choose publisher identity:</div>
+
+                  <label class="swarm-feed-identity-option">
+                    <input type="radio" name="swarm-feed-identity" value="app-scoped" checked>
+                    <div class="swarm-feed-identity-label">
+                      <span class="swarm-feed-identity-name">App-scoped identity</span>
+                      <span class="swarm-feed-identity-desc">Dedicated key for this app only (recommended)</span>
+                    </div>
+                  </label>
+
+                  <label class="swarm-feed-identity-option">
+                    <input type="radio" name="swarm-feed-identity" value="bee-wallet">
+                    <div class="swarm-feed-identity-label">
+                      <span class="swarm-feed-identity-name">Bee wallet identity</span>
+                      <span class="swarm-feed-identity-desc">Uses your node's wallet address</span>
+                    </div>
+                  </label>
+                </div>
+
+                <div class="swarm-connect-warning">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="12" y1="16" x2="12" y2="12"/>
+                    <line x1="12" y1="8" x2="12.01" y2="8"/>
+                  </svg>
+                  <span>Feeds provide stable URLs that this app can update over time. Uses your stamps and bandwidth.</span>
+                </div>
+
+                <div class="swarm-connect-actions">
+                  <button type="button" class="swarm-connect-reject-btn" id="swarm-feed-reject">Cancel</button>
+                  <button type="button" class="swarm-connect-approve-btn" id="swarm-feed-approve">Allow</button>
+                </div>
+              </div>
+            </div>
+
           </div>
         </div>
       </aside>

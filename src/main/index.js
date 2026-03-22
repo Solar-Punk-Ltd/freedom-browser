@@ -59,6 +59,7 @@ const { registerPublishIpc } = require('./swarm/publish-service');
 const { registerPublishHistoryIpc } = require('./swarm/publish-history');
 const { registerSwarmPermissionsIpc } = require('./swarm/swarm-permissions');
 const { registerSwarmProviderIpc } = require('./swarm/swarm-provider-ipc');
+const { registerFeedStoreIpc } = require('./swarm/feed-store');
 const { registerGithubBridgeIpc, cleanupTempDirs } = require('./github-bridge');
 const { registerServiceRegistryIpc } = require('./service-registry');
 const { createMainWindow, setWindowTitle, getMainWindows } = require('./windows/mainWindow');
@@ -118,6 +119,7 @@ async function bootstrap() {
   registerPublishHistoryIpc();
   registerSwarmPermissionsIpc();
   registerSwarmProviderIpc();
+  registerFeedStoreIpc();
   registerRequestRewriter(defaultSession);
   allowInteractivePermissions(defaultSession);
   registerWebContentsHandlers();

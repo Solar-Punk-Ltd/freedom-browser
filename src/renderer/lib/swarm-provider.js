@@ -12,7 +12,7 @@
 
 import { getPermissionKey } from './dapp-provider.js';
 import { getDisplayUrlForWebview } from './tabs.js';
-import { showSwarmConnect, updateSwarmConnectionBanner, showSwarmPublishApproval } from './wallet-ui.js';
+import { showSwarmConnect, updateSwarmConnectionBanner, showSwarmPublishApproval, showSwarmFeedApproval } from './wallet-ui.js';
 
 const ERRORS = {
   USER_REJECTED: { code: 4001, message: 'User rejected the request' },
@@ -81,6 +81,23 @@ async function handleSwarmRequest(webview, request) {
       });
 
       // User approved — forward to main
+      result = await executeWithPermission(method, params, permissionKey);
+    } else if (method === 'swarm_createFeed') {
+      // Feed creation requires permission + feed grant (first time triggers prompt)
+      await requirePermission(permissionKey);
+
+      const hasFeedGrant = await window.swarmFeedStore?.hasFeedIdentity?.(permissionKey);
+      if (!hasFeedGrant) {
+        // First feed operation — show identity choice prompt
+        await new Promise((resolve, reject) => {
+          showSwarmFeedApproval(permissionKey, params, resolve, reject);
+        });
+      }
+
+      result = await executeWithPermission(method, params, permissionKey);
+    } else if (method === 'swarm_updateFeed') {
+      // Feed updates are auto-approved after feed grant
+      await requirePermission(permissionKey);
       result = await executeWithPermission(method, params, permissionKey);
     } else {
       // All other methods: check permission, forward to main

@@ -642,6 +642,8 @@ try {
         publishData(params) { return this.request({ method: 'swarm_publishData', params: params }); },
         publishFiles(params) { return this.request({ method: 'swarm_publishFiles', params: params }); },
         getUploadStatus(params) { return this.request({ method: 'swarm_getUploadStatus', params: params }); },
+        createFeed(params) { return this.request({ method: 'swarm_createFeed', params: params }); },
+        updateFeed(params) { return this.request({ method: 'swarm_updateFeed', params: params }); },
 
         on(event, handler) { if (eventListeners[event]) eventListeners[event].push(handler); return this; },
         removeListener(event, handler) {

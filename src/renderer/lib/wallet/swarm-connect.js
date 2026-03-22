@@ -35,9 +35,18 @@ let swarmPublishPaths;
 let swarmPublishRejectBtn;
 let swarmPublishConfirmBtn;
 
+// DOM references — feed approval screen
+let swarmFeedScreen;
+let swarmFeedBackBtn;
+let swarmFeedSite;
+let swarmFeedName;
+let swarmFeedRejectBtn;
+let swarmFeedApproveBtn;
+
 // Local state
 let swarmConnectPending = null;
 let swarmPublishPending = null;
+let swarmFeedPending = null;
 let currentBannerPermissionKey = null;
 
 export function initSwarmConnect() {
@@ -83,8 +92,25 @@ export function initSwarmConnect() {
     }
   });
 
+  swarmFeedScreen = document.getElementById('sidebar-swarm-feed-approve');
+  swarmFeedBackBtn = document.getElementById('swarm-feed-back');
+  swarmFeedSite = document.getElementById('swarm-feed-site');
+  swarmFeedName = document.getElementById('swarm-feed-name');
+  swarmFeedRejectBtn = document.getElementById('swarm-feed-reject');
+  swarmFeedApproveBtn = document.getElementById('swarm-feed-approve');
+
+  registerScreenHider(() => {
+    const wasVisible = swarmFeedScreen && !swarmFeedScreen.classList.contains('hidden');
+    swarmFeedScreen?.classList.add('hidden');
+    if (wasVisible && swarmFeedPending) {
+      swarmFeedPending.reject({ code: 4001, message: 'User dismissed prompt' });
+      swarmFeedPending = null;
+    }
+  });
+
   setupSwarmConnectScreen();
   setupSwarmPublishScreen();
+  setupSwarmFeedScreen();
 }
 
 function setupSwarmConnectScreen() {
@@ -227,6 +253,7 @@ async function disconnectCurrentSwarmApp() {
 
   try {
     await window.swarmPermissions.revokePermission(currentBannerPermissionKey);
+    await window.swarmFeedStore?.revokeFeedAccess?.(currentBannerPermissionKey);
     console.log('[SwarmConnect] Disconnected:', currentBannerPermissionKey);
 
     // Emit disconnect event to the active webview
@@ -360,4 +387,87 @@ function rejectSwarmPublish() {
   const { reject } = swarmPublishPending;
   reject({ code: 4001, message: 'User rejected publish' });
   console.log('[SwarmConnect] Publish rejected');
+}
+
+// ============================================
+// Feed approval prompt
+// ============================================
+
+function setupSwarmFeedScreen() {
+  if (swarmFeedBackBtn) {
+    swarmFeedBackBtn.addEventListener('click', () => {
+      rejectSwarmFeed();
+      closeSwarmFeedApproval();
+    });
+  }
+
+  if (swarmFeedRejectBtn) {
+    swarmFeedRejectBtn.addEventListener('click', () => {
+      rejectSwarmFeed();
+      closeSwarmFeedApproval();
+    });
+  }
+
+  if (swarmFeedApproveBtn) {
+    swarmFeedApproveBtn.addEventListener('click', () => {
+      approveSwarmFeed();
+      closeSwarmFeedApproval();
+    });
+  }
+}
+
+/**
+ * Show the feed access approval prompt.
+ * On approval, stores the chosen identity mode and grants feed access.
+ */
+export function showSwarmFeedApproval(permissionKey, params, resolve, reject) {
+  swarmFeedPending = { permissionKey, resolve, reject };
+
+  if (swarmFeedSite) {
+    swarmFeedSite.textContent = permissionKey || 'Unknown';
+  }
+
+  if (swarmFeedName) {
+    swarmFeedName.textContent = params?.name || 'unnamed';
+  }
+
+  // Reset radio to default (app-scoped)
+  const defaultRadio = document.querySelector('input[name="swarm-feed-identity"][value="app-scoped"]');
+  if (defaultRadio) defaultRadio.checked = true;
+
+  hideAllSubscreens();
+  walletState.identityView?.classList.add('hidden');
+  swarmFeedScreen?.classList.remove('hidden');
+
+  openSidebarPanel();
+}
+
+function closeSwarmFeedApproval() {
+  swarmFeedScreen?.classList.add('hidden');
+  walletState.identityView?.classList.remove('hidden');
+  swarmFeedPending = null;
+}
+
+async function approveSwarmFeed() {
+  if (!swarmFeedPending) return;
+
+  const { permissionKey, resolve } = swarmFeedPending;
+
+  const selectedRadio = document.querySelector('input[name="swarm-feed-identity"]:checked');
+  const identityMode = selectedRadio?.value || 'app-scoped';
+
+  try {
+    await window.swarmFeedStore.setFeedIdentity(permissionKey, identityMode);
+    resolve();
+    console.log('[SwarmConnect] Feed access approved:', permissionKey, 'mode:', identityMode);
+  } catch (err) {
+    console.error('[SwarmConnect] Failed to set feed identity:', err);
+  }
+}
+
+function rejectSwarmFeed() {
+  if (!swarmFeedPending) return;
+  const { reject } = swarmFeedPending;
+  reject({ code: 4001, message: 'User rejected feed access' });
+  console.log('[SwarmConnect] Feed access rejected');
 }
