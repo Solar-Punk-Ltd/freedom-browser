@@ -224,6 +224,23 @@ describe('feed-store', () => {
       expect(feed.topic).toBe('a');
     });
 
+    test('mutating returned origin entry does not corrupt cache', () => {
+      setOriginEntry('myapp.eth', { identityMode: 'app-scoped', publisherKeyIndex: 0 });
+      setFeed('myapp.eth', 'blog', { topic: 'a', owner: 'b', manifestReference: 'c' });
+
+      const entry = getOriginEntry('myapp.eth');
+      // Mutate the returned object at every level
+      entry.identityMode = 'corrupted';
+      entry.feeds.blog.owner = 'corrupted';
+      entry.feeds.newFeed = { topic: 'injected' };
+
+      // Cache should be unaffected
+      const fresh = getOriginEntry('myapp.eth');
+      expect(fresh.identityMode).toBe('app-scoped');
+      expect(fresh.feeds.blog.owner).toBe('b');
+      expect(fresh.feeds.newFeed).toBeUndefined();
+    });
+
     test('writes to disk', () => {
       setOriginEntry('myapp.eth', { identityMode: 'bee-wallet' });
       const filePath = path.join(tmpDir, 'swarm-feeds.json');
