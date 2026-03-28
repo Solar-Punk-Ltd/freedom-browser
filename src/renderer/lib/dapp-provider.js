@@ -11,6 +11,7 @@
  */
 
 import { showDappConnect, getSelectedChainId, setSelectedChainId, updateConnectionBanner, showDappTxApproval, showDappSignApproval, showVaultUnlock, updateSwarmConnectionBanner } from './wallet-ui.js';
+import { extractSelector } from './wallet/dapp-tx.js';
 
 // Feature flag state
 let identityWalletEnabled = false;
@@ -259,8 +260,27 @@ async function handleProviderRequest(webview, request) {
       // Handle chain switching
       result = await handleSwitchChain(params, permissionKey, webview);
     } else if (method === 'eth_sendTransaction') {
-      // Need transaction approval
-      result = await showDappTxApproval(webview, permissionKey, params[0]);
+      const txParams = params[0];
+      const selector = extractSelector(txParams?.data);
+      const permission = await window.dappPermissions.getPermission(permissionKey);
+      if (!permission) {
+        throw { ...ERRORS.UNAUTHORIZED, message: 'Not connected. Call eth_requestAccounts first.' };
+      }
+
+      const chainId = permission.chainId || parseInt(await getCurrentChainId(), 16);
+
+      // Auto-approve only for contract calls with a matching rule (never plain ETH transfers)
+      if (selector && txParams?.to
+        && await window.dappPermissions.isTransactionAutoApproved(permissionKey, txParams.to, selector, chainId)
+      ) {
+        const vaultStatus = await window.identity?.getStatus?.();
+        if (!vaultStatus?.isUnlocked) {
+          await showVaultUnlock(permissionKey);
+        }
+        result = await autoApproveTx(permission, txParams, chainId, permissionKey);
+      } else {
+        result = await showDappTxApproval(webview, permissionKey, txParams);
+      }
     } else if (method === 'personal_sign' || method === 'eth_signTypedData_v4') {
       const permission = await window.dappPermissions.getPermission(permissionKey);
       if (!permission) {
@@ -295,6 +315,47 @@ async function handleProviderRequest(webview, request) {
     };
     sendProviderResponse(webview, id, null, err);
   }
+}
+
+/**
+ * Send a transaction without showing the approval UI (auto-approved).
+ * Handles gas estimation and signing via wallet IPC.
+ */
+async function autoApproveTx(permission, txParams, chainId, permissionKey) {
+  const walletIndex = permission.walletIndex;
+
+  // Estimate gas
+  const from = await window.wallet.getAddress(walletIndex);
+  const gasEstimate = await window.wallet.estimateGas({
+    from: from?.address,
+    to: txParams.to,
+    value: txParams.value,
+    data: txParams.data,
+    chainId,
+  });
+
+  const gasPrices = await window.wallet.getGasPrice(chainId);
+
+  const tx = {
+    to: txParams.to,
+    value: txParams.value || '0',
+    data: txParams.data,
+    gasLimit: gasEstimate?.gasLimit || txParams.gas,
+    chainId,
+  };
+
+  if (gasPrices?.type === 'eip1559') {
+    tx.maxFeePerGas = gasPrices.maxFeePerGas;
+    tx.maxPriorityFeePerGas = gasPrices.maxPriorityFeePerGas;
+  } else if (gasPrices?.gasPrice) {
+    tx.gasPrice = gasPrices.gasPrice;
+  }
+
+  const result = await window.wallet.dappSendTransaction(tx, walletIndex);
+  if (!result.success) throw new Error(result.error || 'Transaction failed');
+
+  window.dappPermissions.updateLastUsed(permissionKey);
+  return result.hash;
 }
 
 /**

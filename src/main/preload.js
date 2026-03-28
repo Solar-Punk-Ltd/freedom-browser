@@ -357,6 +357,9 @@ contextBridge.exposeInMainWorld('dappPermissions', {
   updateLastUsed: (origin, chainId) => ipcRenderer.invoke('dapp:update-last-used', origin, chainId),
   getSigningAutoApprove: (origin) => ipcRenderer.invoke('dapp:get-signing-auto-approve', origin),
   setSigningAutoApprove: (origin, enabled) => ipcRenderer.invoke('dapp:set-signing-auto-approve', origin, enabled),
+  isTransactionAutoApproved: (origin, to, selector, chainId) => ipcRenderer.invoke('dapp:is-tx-auto-approved', origin, to, selector, chainId),
+  addTransactionAutoApprove: (origin, to, selector, chainId) => ipcRenderer.invoke('dapp:add-tx-auto-approve', origin, to, selector, chainId),
+  removeTransactionAutoApprove: (origin, to, selector, chainId) => ipcRenderer.invoke('dapp:remove-tx-auto-approve', origin, to, selector, chainId),
 });
 
 contextBridge.exposeInMainWorld('swarmPermissions', {

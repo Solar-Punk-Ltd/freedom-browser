@@ -153,6 +153,9 @@ module.exports = {
   DAPP_UPDATE_LAST_USED: 'dapp:update-last-used',
   DAPP_GET_SIGNING_AUTO_APPROVE: 'dapp:get-signing-auto-approve',
   DAPP_SET_SIGNING_AUTO_APPROVE: 'dapp:set-signing-auto-approve',
+  DAPP_IS_TX_AUTO_APPROVED: 'dapp:is-tx-auto-approved',
+  DAPP_ADD_TX_AUTO_APPROVE: 'dapp:add-tx-auto-approve',
+  DAPP_REMOVE_TX_AUTO_APPROVE: 'dapp:remove-tx-auto-approve',
 
   // dApp Provider (webview ↔ renderer ↔ main)
   DAPP_PROVIDER_REQUEST: 'dapp:provider-request',
