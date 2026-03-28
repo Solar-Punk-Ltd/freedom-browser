@@ -72,15 +72,19 @@ async function handleSwarmRequest(webview, request) {
       if (response.error) throw response.error;
       result = response.result;
     } else if (method === 'swarm_publishData' || method === 'swarm_publishFiles') {
-      // Publish requires permission + per-publish user approval
+      // Publish requires permission
       await requirePermission(permissionKey);
 
-      // Show per-publish approval prompt (resolves on Publish, rejects on Cancel)
-      await new Promise((resolve, reject) => {
-        showSwarmPublishApproval(permissionKey, params, resolve, reject);
-      });
+      // Skip approval UI if auto-approve is enabled for this origin
+      const autoApproved = await window.swarmPermissions.getAutoApprove(permissionKey, 'publish');
+      if (!autoApproved) {
+        // Show per-publish approval prompt (resolves on Publish, rejects on Cancel)
+        await new Promise((resolve, reject) => {
+          showSwarmPublishApproval(permissionKey, params, resolve, reject);
+        });
+      }
 
-      // User approved — forward to main
+      // Forward to main
       result = await executeWithPermission(method, params, permissionKey);
     } else if (method === 'swarm_createFeed' || method === 'swarm_updateFeed') {
       // Feed operations require permission + feed grant + unlocked vault
@@ -89,14 +93,26 @@ async function handleSwarmRequest(webview, request) {
       const hasFeedAccess = await window.swarmFeedStore?.hasFeedGrant?.(permissionKey);
       const vaultStatus = await window.identity?.getStatus?.();
       const vaultLocked = !vaultStatus?.isUnlocked;
+      const feedAutoApproved = await window.swarmPermissions.getAutoApprove(permissionKey, 'feeds');
 
-      if (!hasFeedAccess || vaultLocked) {
-        // Show feed approval screen: for identity choice (first use / reconnect)
-        // or for vault unlock (vault locked with existing grant)
+      if (!hasFeedAccess) {
+        // First time or reconnect: show full feed approval (identity choice + unlock)
+        await new Promise((resolve, reject) => {
+          showSwarmFeedApproval(permissionKey, params, resolve, reject);
+        });
+      } else if (vaultLocked) {
+        // Has access but vault locked: show feed approval for unlock
+        // TODO (WP2): replace with dedicated vault unlock screen
+        await new Promise((resolve, reject) => {
+          showSwarmFeedApproval(permissionKey, params, resolve, reject);
+        });
+      } else if (!feedAutoApproved) {
+        // Has access, vault unlocked, but no auto-approve: show approval
         await new Promise((resolve, reject) => {
           showSwarmFeedApproval(permissionKey, params, resolve, reject);
         });
       }
+      // else: auto-approved + vault unlocked → skip UI
 
       result = await executeWithPermission(method, params, permissionKey);
     } else {

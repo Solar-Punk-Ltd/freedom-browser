@@ -163,6 +163,8 @@ module.exports = {
   SWARM_REVOKE_PERMISSION: 'swarm:revoke-permission',
   SWARM_GET_ALL_PERMISSIONS: 'swarm:get-all-permissions',
   SWARM_UPDATE_LAST_USED: 'swarm:update-last-used',
+  SWARM_GET_AUTO_APPROVE: 'swarm:get-auto-approve',
+  SWARM_SET_AUTO_APPROVE: 'swarm:set-auto-approve',
 
   // Swarm Provider (main-process authority)
   SWARM_PROVIDER_EXECUTE: 'swarm:provider-execute',

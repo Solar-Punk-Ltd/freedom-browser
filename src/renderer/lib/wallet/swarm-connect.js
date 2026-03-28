@@ -34,6 +34,7 @@ let swarmPublishPathsRow;
 let swarmPublishPaths;
 let swarmPublishRejectBtn;
 let swarmPublishConfirmBtn;
+let swarmPublishAutoApproveCheckbox;
 
 // DOM references — feed approval screen
 let swarmFeedScreen;
@@ -42,6 +43,8 @@ let swarmFeedSite;
 let swarmFeedName;
 let swarmFeedRejectBtn;
 let swarmFeedApproveBtn;
+
+let swarmFeedAutoApproveCheckbox;
 
 // DOM references — feed unlock section
 let swarmFeedUnlock;
@@ -80,6 +83,7 @@ export function initSwarmConnect() {
   swarmPublishPaths = document.getElementById('swarm-publish-paths');
   swarmPublishRejectBtn = document.getElementById('swarm-publish-reject');
   swarmPublishConfirmBtn = document.getElementById('swarm-publish-confirm');
+  swarmPublishAutoApproveCheckbox = document.getElementById('swarm-publish-auto-approve');
 
   registerScreenHider(() => {
     // Only reject if the screen was actually visible (not already hidden).
@@ -108,6 +112,7 @@ export function initSwarmConnect() {
   swarmFeedRejectBtn = document.getElementById('swarm-feed-reject');
   swarmFeedApproveBtn = document.getElementById('swarm-feed-approve');
 
+  swarmFeedAutoApproveCheckbox = document.getElementById('swarm-feed-auto-approve');
   swarmFeedUnlock = document.getElementById('swarm-feed-unlock');
   swarmFeedTouchIdBtn = document.getElementById('swarm-feed-touchid-btn');
   swarmFeedPasswordLink = document.getElementById('swarm-feed-password-link');
@@ -321,7 +326,10 @@ function setupSwarmPublishScreen() {
  * Resolves on "Publish", rejects (code 4001) on "Cancel".
  */
 export function showSwarmPublishApproval(permissionKey, params, resolve, reject) {
-  swarmPublishPending = { resolve, reject };
+  swarmPublishPending = { permissionKey, resolve, reject };
+
+  // Reset auto-approve checkbox
+  if (swarmPublishAutoApproveCheckbox) swarmPublishAutoApproveCheckbox.checked = false;
 
   if (swarmPublishSite) {
     swarmPublishSite.textContent = permissionKey || 'Unknown';
@@ -392,9 +400,15 @@ function closeSwarmPublishApproval() {
   swarmPublishPending = null;
 }
 
-function approveSwarmPublish() {
+async function approveSwarmPublish() {
   if (!swarmPublishPending) return;
-  const { resolve } = swarmPublishPending;
+  const { permissionKey, resolve } = swarmPublishPending;
+
+  if (swarmPublishAutoApproveCheckbox?.checked && permissionKey) {
+    await window.swarmPermissions.setAutoApprove(permissionKey, 'publish', true);
+    console.log('[SwarmConnect] Auto-approve publish enabled for:', permissionKey);
+  }
+
   resolve();
   console.log('[SwarmConnect] Publish approved');
 }
@@ -461,6 +475,9 @@ function setupSwarmFeedScreen() {
  */
 export async function showSwarmFeedApproval(permissionKey, params, resolve, reject) {
   swarmFeedPending = { permissionKey, resolve, reject };
+
+  // Reset auto-approve checkbox
+  if (swarmFeedAutoApproveCheckbox) swarmFeedAutoApproveCheckbox.checked = false;
 
   if (swarmFeedSite) {
     swarmFeedSite.textContent = permissionKey || 'Unknown';
@@ -613,6 +630,12 @@ async function approveSwarmFeed() {
 
   try {
     await window.swarmFeedStore.setFeedIdentity(permissionKey, identityMode);
+
+    if (swarmFeedAutoApproveCheckbox?.checked && permissionKey) {
+      await window.swarmPermissions.setAutoApprove(permissionKey, 'feeds', true);
+      console.log('[SwarmConnect] Auto-approve feeds enabled for:', permissionKey);
+    }
+
     resolve();
     console.log('[SwarmConnect] Feed access approved:', permissionKey, 'mode:', identityMode);
   } catch (err) {

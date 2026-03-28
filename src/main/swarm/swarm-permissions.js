@@ -6,7 +6,7 @@
  * permissions consume storage/bandwidth, wallet permissions expose accounts.
  *
  * Permissions are persisted to disk. Schema per origin:
- *   { origin, connectedAt, lastUsed, autoPublish: false }
+ *   { origin, connectedAt, lastUsed, autoApprove: { publish: false, feeds: false } }
  */
 
 const { app, ipcMain } = require('electron');
@@ -78,7 +78,7 @@ function grantPermission(origin) {
     origin: key,
     connectedAt: now,
     lastUsed: now,
-    autoPublish: false,
+    autoApprove: { publish: false, feeds: false },
   };
 
   permissions[key] = permission;
@@ -138,6 +138,42 @@ function updateLastUsed(origin) {
 }
 
 /**
+ * Check if an auto-approve type is enabled for an origin.
+ * @param {string} origin
+ * @param {'publish'|'feeds'} type
+ * @returns {boolean}
+ */
+function getAutoApprove(origin, type) {
+  const permission = getPermission(origin);
+  return permission?.autoApprove?.[type] === true;
+}
+
+/**
+ * Set an auto-approve type for an origin.
+ * @param {string} origin
+ * @param {'publish'|'feeds'} type
+ * @param {boolean} enabled
+ * @returns {boolean} True if updated
+ */
+function setAutoApprove(origin, type, enabled) {
+  const permissions = loadPermissions();
+  const key = normalizeOrigin(origin);
+
+  if (!permissions[key]) return false;
+
+  if (!permissions[key].autoApprove) {
+    permissions[key].autoApprove = { publish: false, feeds: false };
+  }
+
+  permissions[key].autoApprove[type] = enabled;
+  permissionsCache = permissions;
+  savePermissions();
+
+  console.log(`[SwarmPermissions] Auto-approve ${type} ${enabled ? 'enabled' : 'disabled'} for:`, key);
+  return true;
+}
+
+/**
  * Register IPC handlers for Swarm permissions.
  */
 function registerSwarmPermissionsIpc() {
@@ -161,6 +197,14 @@ function registerSwarmPermissionsIpc() {
     return updateLastUsed(origin);
   });
 
+  ipcMain.handle(IPC.SWARM_GET_AUTO_APPROVE, (_event, origin, type) => {
+    return getAutoApprove(origin, type);
+  });
+
+  ipcMain.handle(IPC.SWARM_SET_AUTO_APPROVE, (_event, origin, type, enabled) => {
+    return setAutoApprove(origin, type, enabled);
+  });
+
   console.log('[SwarmPermissions] IPC handlers registered');
 }
 
@@ -175,6 +219,8 @@ module.exports = {
   revokePermission,
   getAllPermissions,
   updateLastUsed,
+  getAutoApprove,
+  setAutoApprove,
   registerSwarmPermissionsIpc,
   _resetCache,
 };

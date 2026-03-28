@@ -363,6 +363,8 @@ contextBridge.exposeInMainWorld('swarmPermissions', {
   revokePermission: (origin) => ipcRenderer.invoke('swarm:revoke-permission', origin),
   getAllPermissions: () => ipcRenderer.invoke('swarm:get-all-permissions'),
   updateLastUsed: (origin) => ipcRenderer.invoke('swarm:update-last-used', origin),
+  getAutoApprove: (origin, type) => ipcRenderer.invoke('swarm:get-auto-approve', origin, type),
+  setAutoApprove: (origin, type, enabled) => ipcRenderer.invoke('swarm:set-auto-approve', origin, type, enabled),
 });
 
 contextBridge.exposeInMainWorld('swarmProvider', {
