@@ -60,6 +60,7 @@ module.exports = {
   deriveEthereumKey,
   deriveEd25519Key,
   deriveUserWallet,
+  derivePublisherKey,
   getSeed,
   PATHS,
   createBeeKeystore,
