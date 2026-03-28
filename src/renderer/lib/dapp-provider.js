@@ -324,30 +324,44 @@ async function handleProviderRequest(webview, request) {
 async function autoApproveTx(permission, txParams, chainId, permissionKey) {
   const walletIndex = permission.walletIndex;
 
-  // Estimate gas
-  const from = await window.wallet.getAddress(walletIndex);
+  // Resolve sender address and gas price in parallel
+  const [walletsResult, gasPrices] = await Promise.all([
+    window.wallet.getDerivedWallets(),
+    window.wallet.getGasPrice(chainId),
+  ]);
+
+  const wallets = walletsResult?.success ? walletsResult.wallets : [];
+  const wallet = wallets.find((w) => w.index === walletIndex);
+  const fromAddress = wallet?.address;
+
+  if (!gasPrices?.success) {
+    throw new Error(gasPrices?.error || 'Failed to get gas prices');
+  }
+
   const gasEstimate = await window.wallet.estimateGas({
-    from: from?.address,
+    from: fromAddress,
     to: txParams.to,
     value: txParams.value,
     data: txParams.data,
     chainId,
   });
 
-  const gasPrices = await window.wallet.getGasPrice(chainId);
+  if (!gasEstimate?.success) {
+    throw new Error(gasEstimate?.error || 'Gas estimation failed');
+  }
 
   const tx = {
     to: txParams.to,
     value: txParams.value || '0',
     data: txParams.data,
-    gasLimit: gasEstimate?.gasLimit || txParams.gas,
+    gasLimit: gasEstimate.gasLimit || txParams.gas,
     chainId,
   };
 
-  if (gasPrices?.type === 'eip1559') {
+  if (gasPrices.type === 'eip1559') {
     tx.maxFeePerGas = gasPrices.maxFeePerGas;
     tx.maxPriorityFeePerGas = gasPrices.maxPriorityFeePerGas;
-  } else if (gasPrices?.gasPrice) {
+  } else if (gasPrices.gasPrice) {
     tx.gasPrice = gasPrices.gasPrice;
   }
 
