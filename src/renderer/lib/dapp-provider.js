@@ -31,8 +31,9 @@ const providerStates = new WeakMap();
 // Current active webview reference (set by tabs.js)
 let activeWebview = null;
 
-// Callback for showing connection approval UI (legacy, kept for compatibility)
-let showConnectionApproval = null;
+// Callback for showing connection approval UI (legacy, kept for compatibility
+// with external callers of the exported onConnectionApproval setter).
+let _showConnectionApproval = null;
 
 /**
  * EIP-1193 error codes
@@ -85,30 +86,6 @@ const READ_ONLY_METHODS = [
   'eth_uninstallFilter',
   'web3_clientVersion',
   'web3_sha3',
-];
-
-/**
- * Methods that require connection (account access)
- */
-const ACCOUNT_METHODS = [
-  'eth_accounts',
-  'eth_requestAccounts',
-];
-
-/**
- * Methods that require user approval
- */
-const APPROVAL_METHODS = [
-  'eth_sendTransaction',
-  'eth_signTransaction',
-  'personal_sign',
-  'eth_sign',
-  'eth_signTypedData',
-  'eth_signTypedData_v3',
-  'eth_signTypedData_v4',
-  'wallet_addEthereumChain',
-  'wallet_switchEthereumChain',
-  'wallet_watchAsset',
 ];
 
 /**
@@ -465,15 +442,6 @@ function sendProviderEvent(webview, event, data) {
 }
 
 /**
- * Send state update to a webview
- */
-function sendProviderState(webview, state) {
-  if (webview && webview.send) {
-    webview.send('dapp:provider-state', state);
-  }
-}
-
-/**
  * Setup provider request listener for a webview
  */
 export function setupWebviewProvider(webview) {
@@ -514,7 +482,7 @@ export function getActiveWebview() {
  * Register callback for showing connection approval UI
  */
 export function onConnectionApproval(callback) {
-  showConnectionApproval = callback;
+  _showConnectionApproval = callback;
 }
 
 /**

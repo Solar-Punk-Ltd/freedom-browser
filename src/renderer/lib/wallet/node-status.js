@@ -24,8 +24,6 @@ const SWARM_STARTUP_MAX_MS = 30000;
 // DOM references
 let swarmModeBadge;
 let swarmStatusBadge;
-let swarmStampsCount;
-let swarmStampsSummary;
 let swarmBalanceXdaiEl;
 let swarmBalanceXbzzEl;
 let swarmWalletGroup;
@@ -37,9 +35,6 @@ let swarmSetupCta;
 let swarmSetupBtn;
 let swarmSetupBtnLabel;
 let swarmSetupHint;
-let walletNotification;
-let walletNotificationText;
-let walletNotificationAction;
 
 let desiredSwarmMode = 'ultraLight';
 let actualSwarmMode = null;
@@ -62,8 +57,6 @@ function createEmptySwarmRuntimeInfo() {
 export function initNodeStatus() {
   swarmModeBadge = document.getElementById('swarm-mode-badge');
   swarmStatusBadge = document.getElementById('swarm-status-badge');
-  swarmStampsCount = document.getElementById('swarm-stamps-count');
-  swarmStampsSummary = document.getElementById('swarm-stamps-summary');
   swarmBalanceXdaiEl = document.getElementById('swarm-balance-xdai');
   swarmBalanceXbzzEl = document.getElementById('swarm-balance-xbzz');
   swarmWalletGroup = document.getElementById('swarm-wallet-group');
@@ -203,7 +196,7 @@ function subscribeToNodeStatus() {
   }
 
   if (window.ipfs?.onStatusUpdate) {
-    const unsubIpfs = window.ipfs.onStatusUpdate(({ status, error }) => {
+    const unsubIpfs = window.ipfs.onStatusUpdate(({ status }) => {
       updateNodeBadge('ipfs-status-badge', status);
     });
     if (unsubIpfs) nodeStatusUnsubscribers.push(unsubIpfs);
@@ -461,24 +454,6 @@ async function updatePublisherIdentitiesButton() {
     swarmIdentitiesCta.classList.toggle('hidden', !entries || entries.length === 0);
   } catch {
     swarmIdentitiesCta.classList.add('hidden');
-  }
-}
-
-function updateIpfsStatus(status, _error) {
-  const badge = document.getElementById('ipfs-status-badge');
-  if (badge) {
-    const badgeState = getStatusBadgeState(status);
-    badge.textContent = badgeState.text;
-    badge.dataset.status = badgeState.value;
-  }
-}
-
-function updateRadicleStatus(status, _error) {
-  const badge = document.getElementById('radicle-status-badge');
-  if (badge) {
-    const badgeState = getStatusBadgeState(status);
-    badge.textContent = badgeState.text;
-    badge.dataset.status = badgeState.value;
   }
 }
 

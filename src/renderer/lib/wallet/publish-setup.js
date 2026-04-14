@@ -12,7 +12,6 @@ import { normalizeSwarmMode } from './swarm-readiness.js';
 import { fetchBeeJson } from './bee-api.js';
 import { openStampManager } from './stamp-manager.js';
 import { topUpXdai, topUpXbzz, GNOSIS_CHAIN_ID, XDAI_TOKEN_KEY, XBZZ_TOKEN_KEY } from './funding-actions.js';
-import { createTab } from '../tabs.js';
 
 const POLL_MS = 5000;
 

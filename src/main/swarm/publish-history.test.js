@@ -86,7 +86,7 @@ describe('publish-history', () => {
   });
 
   test('removeEntry removes a specific entry', () => {
-    const e1 = addEntry({ name: 'keep' });
+    addEntry({ name: 'keep' });
     const e2 = addEntry({ name: 'remove' });
 
     removeEntry(e2.id);

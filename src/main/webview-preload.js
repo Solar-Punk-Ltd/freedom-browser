@@ -256,9 +256,16 @@ class ProviderRpcError extends Error {
 }
 
 /**
- * The Ethereum provider object injected as window.ethereum
+ * Legacy contextBridge-style Ethereum provider object.
+ *
+ * This object was originally going to be exposed as window.ethereum via
+ * contextBridge, but the actual injection (below, around line 440) now
+ * uses a postMessage bridge injected into page context instead. This
+ * constant is retained as reference for the intended API shape but is
+ * not wired up at runtime. A follow-up can delete it entirely once
+ * nothing relies on it for documentation.
  */
-const ethereumProvider = {
+const _ethereumProvider = {
   // MetaMask compatibility
   isMetaMask: true,
   isFreedomBrowser: true,
