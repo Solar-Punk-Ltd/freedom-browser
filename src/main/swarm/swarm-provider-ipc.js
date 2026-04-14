@@ -99,6 +99,15 @@ async function executeSwarmMethod(method, params, origin) {
       return handleGetCapabilities(normalizedOrigin);
     }
 
+    // swarm_readFeedEntry: no permission required. Feeds are public Swarm
+    // data — any origin can read them via any Bee gateway without auth.
+    // Gating this behind connection permission would force unnecessary
+    // prompts for passive use cases (e.g. profile pages displaying other
+    // users' activity feeds discovered on-chain).
+    if (method === 'swarm_readFeedEntry') {
+      return handleReadFeedEntry(params, normalizedOrigin);
+    }
+
     // All other methods require permission
     const permission = getPermission(normalizedOrigin);
     if (!permission) {
@@ -137,10 +146,6 @@ async function executeSwarmMethod(method, params, origin) {
       const result = await handleWriteFeedEntry(params, normalizedOrigin);
       if (result.result) resetVaultAutoLockTimer();
       return result;
-    }
-
-    if (method === 'swarm_readFeedEntry') {
-      return handleReadFeedEntry(params, normalizedOrigin);
     }
 
     return { error: ERRORS.INTERNAL_ERROR };

@@ -1157,10 +1157,24 @@ describe('swarm-provider-ipc', () => {
       expect(result.error.code).toBe(-32602);
     });
 
-    test('rejects without permission', async () => {
+    test('does NOT require connection permission (public data read)', async () => {
+      // Feeds are public Swarm data — readable from any Bee gateway without
+      // auth. Gating this behind requestAccess would force prompts for
+      // passive use cases like viewing on-chain-discovered profile feeds.
       mockGetPermission.mockReturnValue(null);
-      const result = await invokeProvider('swarm_readFeedEntry', { topic: VALID_TOPIC, owner: VALID_OWNER }, 'myapp.eth');
-      expect(result.error.code).toBe(4100);
+      mockGetBeeApiUrl.mockReturnValue('http://127.0.0.1:1633');
+      global.fetch.mockResolvedValueOnce({ ok: true, json: async () => ({}) }); // /node
+      mockReadFeedPayload.mockResolvedValue({
+        payload: Buffer.from('public data'),
+        index: 0,
+        nextIndex: 1,
+      });
+
+      const result = await invokeProvider('swarm_readFeedEntry', { topic: VALID_TOPIC, owner: VALID_OWNER }, 'unknown.eth');
+
+      expect(result.result).toBeDefined();
+      expect(result.result.data).toBeTruthy();
+      expect(result.error).toBeUndefined();
     });
 
     test('does NOT require feed grant', async () => {

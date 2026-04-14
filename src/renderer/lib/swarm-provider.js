@@ -82,8 +82,11 @@ async function handleSwarmRequest(webview, request) {
 
       result = await executeWithPermission(method, params, permissionKey);
     } else if (method === 'swarm_readFeedEntry') {
-      // Permission checked inside executeWithPermission — no separate requirePermission needed
-      result = await executeWithPermission(method, params, permissionKey);
+      // No permission required — feeds are public Swarm data. Forward
+      // straight to main, same pattern as swarm_getCapabilities.
+      const response = await window.swarmProvider.execute(method, params, permissionKey);
+      if (response.error) throw response.error;
+      result = response.result;
     } else if (method === 'swarm_createFeed' || method === 'swarm_updateFeed' || method === 'swarm_writeFeedEntry') {
       await requirePermission(permissionKey);
 
