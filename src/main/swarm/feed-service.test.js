@@ -41,6 +41,20 @@ class MockFeedIndex {
   toBigInt() { return this._value; }
 }
 
+// Stand-in for bee-js Bytes — an object wrapping a Uint8Array.
+// Importantly, it's NOT array-like: numeric indices return undefined.
+// Buffer.from(MockBytes) would produce a Buffer of zeros — exposing a bug
+// where the service forgets to call .toUint8Array() first.
+class MockBytes {
+  constructor(data) {
+    this._bytes = data instanceof Uint8Array
+      ? data
+      : new Uint8Array(typeof data === 'string' ? Buffer.from(data) : data);
+    this.length = this._bytes.length;
+  }
+  toUint8Array() { return this._bytes; }
+}
+
 // Stand-in for bee-js BeeResponseError — used for error discrimination
 class MockBeeResponseError extends Error {
   constructor(status, message = 'Bee response error') {
@@ -533,7 +547,7 @@ describe('feed-service', () => {
     test('reads latest entry when no index provided', async () => {
       const reader = createMockReader({
         downloadPayloadResult: {
-          payload: Buffer.from('latest data'),
+          payload: new MockBytes('latest data'),
           feedIndex: new MockFeedIndex(3),
           feedIndexNext: new MockFeedIndex(4),
         },
@@ -551,7 +565,7 @@ describe('feed-service', () => {
     test('reads specific index when provided', async () => {
       const reader = createMockReader({
         downloadPayloadResult: {
-          payload: Buffer.from('entry 2'),
+          payload: new MockBytes('entry 2'),
           feedIndex: new MockFeedIndex(2),
           feedIndexNext: undefined,
         },
@@ -566,11 +580,31 @@ describe('feed-service', () => {
       expect(result.nextIndex).toBeNull();
     });
 
+    test('unwraps bee-js Bytes payload via toUint8Array (regression test for zeroing bug)', async () => {
+      // MockBytes mirrors bee-js's Bytes class — an object with .length + .toUint8Array(),
+      // but NO numeric index properties. If the service does Buffer.from(bytesInstance)
+      // directly, Node treats it as array-like and fills with zeros. The fix is to
+      // call .toUint8Array() first.
+      const reader = createMockReader({
+        downloadPayloadResult: {
+          payload: new MockBytes('HELLO-WORLD'),
+          feedIndex: new MockFeedIndex(0),
+          feedIndexNext: new MockFeedIndex(1),
+        },
+      });
+      mockMakeFeedReader.mockReturnValue(reader);
+
+      const result = await readFeedPayload(MOCK_OWNER, new MockTopic('ab'.repeat(32)), 0);
+
+      // The actual text must round-trip, not a Buffer of zeros of matching length
+      expect(result.payload.toString('utf8')).toBe('HELLO-WORLD');
+    });
+
     test('passes Topic object directly to makeFeedReader', async () => {
       const topic = new MockTopic('cd'.repeat(32));
       const reader = createMockReader({
         downloadPayloadResult: {
-          payload: Buffer.from('data'),
+          payload: new MockBytes('data'),
           feedIndex: new MockFeedIndex(0),
         },
       });
@@ -628,7 +662,7 @@ describe('feed-service', () => {
     test('constructs EthAddress from owner string', async () => {
       const reader = createMockReader({
         downloadPayloadResult: {
-          payload: Buffer.from('data'),
+          payload: new MockBytes('data'),
           feedIndex: new MockFeedIndex(0),
         },
       });

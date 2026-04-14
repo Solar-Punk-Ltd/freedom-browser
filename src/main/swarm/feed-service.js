@@ -260,7 +260,7 @@ async function readFeedPayload(ownerAddress, topic, index) {
     const options = index !== undefined && index !== null ? { index } : undefined;
     const result = await reader.downloadPayload(options);
 
-    const payload = Buffer.from(result.payload);
+    const payload = Buffer.from(result.payload.toUint8Array());
     const readIndex = feedIndexToNumber(result.feedIndex);
     const nextIndex = result.feedIndexNext
       ? feedIndexToNumber(result.feedIndexNext)
