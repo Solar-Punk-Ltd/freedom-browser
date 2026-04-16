@@ -83,10 +83,22 @@ function shallowEqual(a, b) {
   return true;
 }
 
+function pickKnownSettings(input) {
+  if (!input || typeof input !== 'object') return {};
+  const filtered = {};
+  for (const key of Object.keys(DEFAULT_SETTINGS)) {
+    if (Object.prototype.hasOwnProperty.call(input, key)) {
+      filtered[key] = input[key];
+    }
+  }
+  return filtered;
+}
+
 function saveSettings(newSettings) {
   try {
     const previous = loadSettings();
-    const merged = { ...previous, ...newSettings };
+    const sanitized = pickKnownSettings(newSettings);
+    const merged = { ...previous, ...sanitized };
     if (shallowEqual(previous, merged)) {
       return true;
     }
@@ -94,8 +106,8 @@ function saveSettings(newSettings) {
     fs.writeFileSync(filePath, JSON.stringify(merged, null, 2), 'utf-8');
     cachedSettings = merged;
 
-    if (newSettings.theme && newSettings.theme !== previous.theme) {
-      applyNativeTheme(newSettings.theme);
+    if (sanitized.theme && sanitized.theme !== previous.theme) {
+      applyNativeTheme(sanitized.theme);
     }
 
     broadcastSettingsUpdated(merged);
