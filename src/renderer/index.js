@@ -51,7 +51,7 @@ import { initPageContextMenu, hidePageContextMenu } from './lib/page-context-men
 import { pushDebug } from './lib/debug.js';
 import { initOnboarding, checkAndShowOnboarding } from './lib/onboarding.js';
 import { initSidebar } from './lib/sidebar.js';
-import { initWalletUi } from './lib/wallet-ui.js';
+import { initWalletUi, openPublishSetupFlow } from './lib/wallet-ui.js';
 
 const electronAPI = window.electronAPI;
 
@@ -119,6 +119,9 @@ const closeAllOverlays = () => {
 // Listen for close menus from main process (e.g., system menu clicked)
 // Don't close autocomplete here - mirrors browser behavior where address bar stays open
 electronAPI.onCloseMenus?.(closeAllMenus);
+
+// Internal pages can deep-link into the sidebar publish-setup checklist.
+electronAPI.onOpenPublishSetup?.(openPublishSetupFlow);
 
 // Initialize update notification toast
 function initUpdateNotifications() {
