@@ -73,6 +73,8 @@ function broadcastSettingsUpdated(merged) {
   }
 }
 
+// Strict shallow equality. Safe because every value in DEFAULT_SETTINGS is a
+// primitive (string/number/boolean); revisit if a nested value is added.
 function shallowEqual(a, b) {
   if (a === b) return true;
   if (!a || !b) return false;
