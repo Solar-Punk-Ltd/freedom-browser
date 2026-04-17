@@ -2,6 +2,12 @@
 
 All notable changes to Freedom will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- Wallet send: recipient field now accepts ENS names (`.eth`, `.box`, subdomains). The name is resolved to its `addr` record on mainnet when you press Continue, and the review screen shows both the name and the resolved address so you can verify before confirming.
+
 ## [0.6.2] - 2026-03-01
 
 ### Added
