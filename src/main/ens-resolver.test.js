@@ -15,7 +15,6 @@ const mockDestroy = jest.fn();
 const mockGetResolver = jest.fn();
 const mockResolveName = jest.fn();
 const mockUrResolve = jest.fn();
-const mockUrResolveMulticall = jest.fn();
 const mockUrReverse = jest.fn();
 
 jest.mock('ethers', () => {
@@ -30,7 +29,6 @@ jest.mock('ethers', () => {
       })),
       Contract: jest.fn().mockImplementation(() => ({
         resolve: mockUrResolve,
-        resolveMulticall: mockUrResolveMulticall,
         reverse: mockUrReverse,
       })),
       // Pure helpers — use the real implementations so the UR helper's
@@ -54,7 +52,6 @@ const {
   testRpcUrl,
   invalidateCachedProvider,
   universalResolverCall,
-  universalResolverMulticall,
   isResolverNotFoundError,
 } = require('./ens-resolver');
 
@@ -430,14 +427,14 @@ describe('ens-resolver', () => {
 
   describe('resolveEnsReverse', () => {
     const RESOLVER = '0x0000000000000000000000000000000000001234';
-    // Address pool — each test uses a unique one to avoid ensReverseCache
-    // pollution across tests (same pattern as the name-keyed tests above).
+    // Unique per-test addresses avoid ensReverseCache pollution across tests.
     const addr = (n) => '0x' + String(n).padStart(40, '0');
 
-    test('returns verified name when forward-verify passes', async () => {
+    test('returns verified name when UR resolves successfully', async () => {
+      // UR verifies forward-resolution internally before returning a name —
+      // a successful return is already a trusted match, no external check.
       const input = addr('1001');
       mockUrReverse.mockResolvedValue(['verified1.eth', RESOLVER, RESOLVER]);
-      mockUrResolve.mockResolvedValue(urReturnsAddress(input));
 
       const result = await resolveEnsReverse(input);
 
@@ -448,29 +445,19 @@ describe('ens-resolver', () => {
       });
     });
 
-    test('UNVERIFIED when reverse name resolves to a different address', async () => {
+    test('UNVERIFIED when UR reverts with ReverseAddressMismatch', async () => {
       const input = addr('1002');
-      mockUrReverse.mockResolvedValue(['spoof.eth', RESOLVER, RESOLVER]);
-      mockUrResolve.mockResolvedValue(urReturnsAddress(addr('9999')));
+      const err = new Error('execution reverted: ReverseAddressMismatch');
+      err.data = '0xef9c03ce00000000000000000000000000000000';
+      mockUrReverse.mockRejectedValue(err);
 
       const result = await resolveEnsReverse(input);
 
       expect(result.success).toBe(false);
       expect(result.reason).toBe('UNVERIFIED');
-      expect(result.claimedUnverifiedName).toBe('spoof.eth');
-    });
-
-    test('UNVERIFIED when the reverse-claimed name has no forward addr record', async () => {
-      const input = addr('1003');
-      mockUrReverse.mockResolvedValue(['orphan.eth', RESOLVER, RESOLVER]);
-      mockUrResolve.mockResolvedValue(
-        urReturnsAddress('0x0000000000000000000000000000000000000000')
-      );
-
-      const result = await resolveEnsReverse(input);
-
-      expect(result.success).toBe(false);
-      expect(result.reason).toBe('UNVERIFIED');
+      // No claimed-name field — keeps spoofed names out of the return shape
+      // entirely so no caller can accidentally surface them.
+      expect(result.claimedUnverifiedName).toBeUndefined();
     });
 
     test('NO_REVERSE when UR returns empty name', async () => {
@@ -485,9 +472,9 @@ describe('ens-resolver', () => {
 
     test('NO_REVERSE when UR reverts with ResolverNotFound', async () => {
       const input = addr('1005');
-      mockUrReverse.mockRejectedValue(
-        new Error('execution reverted: ResolverNotFound')
-      );
+      const err = new Error('execution reverted: ResolverNotFound');
+      err.data = '0x77209fe800000000';
+      mockUrReverse.mockRejectedValue(err);
 
       const result = await resolveEnsReverse(input);
 
@@ -521,7 +508,6 @@ describe('ens-resolver', () => {
       mockUrReverse
         .mockRejectedValueOnce(providerError)
         .mockResolvedValueOnce(['retry-reverse.eth', RESOLVER, RESOLVER]);
-      mockUrResolve.mockResolvedValue(urReturnsAddress(input));
 
       const result = await resolveEnsReverse(input);
 
@@ -533,7 +519,6 @@ describe('ens-resolver', () => {
     test('caches successful verified results', async () => {
       const input = addr('1008');
       mockUrReverse.mockResolvedValue(['cached.eth', RESOLVER, RESOLVER]);
-      mockUrResolve.mockResolvedValue(urReturnsAddress(input));
 
       await resolveEnsReverse(input);
       await resolveEnsReverse(input);
@@ -554,7 +539,6 @@ describe('ens-resolver', () => {
     test('normalizes input address to lowercase for caching', async () => {
       const input = '0xAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAa10101010';
       mockUrReverse.mockResolvedValue(['mixed.eth', RESOLVER, RESOLVER]);
-      mockUrResolve.mockResolvedValue(urReturnsAddress(input.toLowerCase()));
 
       await resolveEnsReverse(input);
       await resolveEnsReverse(input.toLowerCase());
@@ -639,7 +623,7 @@ describe('ens-resolver', () => {
       await universalResolverCall(provider, 'vitalik.eth', '0xbc1c58d1');
 
       expect(ethers.Contract).toHaveBeenCalledWith(
-        '0x5a9236e72a66d3e08b83dcf489b4d850792b6009',
+        '0xeEeEEEeE14D718C2B47D9923Deab1335E144EeEe',
         expect.arrayContaining([expect.stringContaining('function resolve')]),
         provider
       );
@@ -651,52 +635,6 @@ describe('ens-resolver', () => {
       const provider = new ethers.JsonRpcProvider('http://localhost:8545');
       await expect(
         universalResolverCall(provider, 'unregistered.eth', '0xbc1c58d1')
-      ).rejects.toThrow('ResolverNotFound');
-    });
-  });
-
-  describe('universalResolverMulticall', () => {
-    test('encodes name, opts into CCIP-Read, returns raw per-call responses', async () => {
-      // Simulate three responses with different return-type shapes, as the
-      // real UR would: (address), (bytes), (string) — each raw-ABI-encoded.
-      const r1 = actualEthers.AbiCoder.defaultAbiCoder().encode(
-        ['address'],
-        ['0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045']
-      );
-      const r2 = actualEthers.AbiCoder.defaultAbiCoder().encode(['bytes'], ['0xdeadbeef']);
-      const r3 = actualEthers.AbiCoder.defaultAbiCoder().encode(['string'], ['hello']);
-      mockUrResolveMulticall.mockResolvedValue([r1, r2, r3]);
-
-      const provider = new ethers.JsonRpcProvider('http://localhost:8545');
-      const calls = ['0x3b3b57de', '0xbc1c58d1', '0x59d1d43c'];
-      const results = await universalResolverMulticall(provider, 'vitalik.eth', calls);
-
-      // Results are the raw per-call ABI-encoded responses. Caller decodes
-      // each per its specific return type.
-      expect(results).toEqual([r1, r2, r3]);
-
-      expect(mockUrResolveMulticall).toHaveBeenCalledTimes(1);
-      const [encodedName, passedCalls, overrides] = mockUrResolveMulticall.mock.calls[0];
-      expect(encodedName).toBe(actualEthers.dnsEncode('vitalik.eth', 255));
-      expect(passedCalls).toEqual(calls);
-      expect(overrides).toEqual({ enableCcipRead: true });
-    });
-
-    test('handles empty calls array', async () => {
-      mockUrResolveMulticall.mockResolvedValue([]);
-
-      const provider = new ethers.JsonRpcProvider('http://localhost:8545');
-      const results = await universalResolverMulticall(provider, 'vitalik.eth', []);
-
-      expect(results).toEqual([]);
-    });
-
-    test('propagates reverts to the caller', async () => {
-      mockUrResolveMulticall.mockRejectedValue(new Error('execution reverted: ResolverNotFound'));
-
-      const provider = new ethers.JsonRpcProvider('http://localhost:8545');
-      await expect(
-        universalResolverMulticall(provider, 'unreg.eth', ['0x3b3b57de'])
       ).rejects.toThrow('ResolverNotFound');
     });
   });
@@ -714,12 +652,6 @@ describe('ens-resolver', () => {
       ).toBe(true);
     });
 
-    test('matches UnreachableName in error message', () => {
-      expect(
-        isResolverNotFoundError(new Error('execution reverted: UnreachableName'))
-      ).toBe(true);
-    });
-
     // ethers v6 surfaces revert selectors on err.data directly — this is
     // the shape we see on real CALL_EXCEPTION errors from a live RPC.
     test('matches ResolverNotFound selector on err.data (ethers v6)', () => {
@@ -731,12 +663,6 @@ describe('ens-resolver', () => {
     test('matches ResolverNotContract selector on err.data', () => {
       const err = new Error('execution reverted');
       err.data = '0x1e9535f2000000000000000000';
-      expect(isResolverNotFoundError(err)).toBe(true);
-    });
-
-    test('matches UnreachableName selector on err.data', () => {
-      const err = new Error('execution reverted');
-      err.data = '0x5fe9a5df000000000000000000';
       expect(isResolverNotFoundError(err)).toBe(true);
     });
 
@@ -762,6 +688,12 @@ describe('ens-resolver', () => {
       expect(isResolverNotFoundError(null)).toBe(false);
       expect(isResolverNotFoundError(undefined)).toBe(false);
       expect(isResolverNotFoundError({})).toBe(false);
+    });
+
+    test('does NOT match ReverseAddressMismatch (separate concept)', () => {
+      const err = new Error('execution reverted: ReverseAddressMismatch');
+      err.data = '0xef9c03ce00000000';
+      expect(isResolverNotFoundError(err)).toBe(false);
     });
   });
 });

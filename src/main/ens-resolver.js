@@ -5,16 +5,16 @@ const IPC = require('../shared/ipc-channels');
 const { success, failure } = require('./ipc-contract');
 const { loadSettings } = require('./settings-store');
 
-// ENS v3 Universal Resolver (ENS Labs, current generation).
-// One call here replaces the 3-step "registry lookup → supportsWildcard
-// → contenthash" flow ethers would otherwise make, and handles CCIP-Read
+// Canonical ENS Universal Resolver — a DAO-owned proxy that delegates to
+// the current implementation, so future UR upgrades don't require a code
+// change here. Docs: https://docs.ens.domains/resolvers/universal/
+// One call replaces the 3-step "registry lookup → supportsWildcard →
+// contenthash" flow ethers would otherwise make, and handles CCIP-Read
 // transparently for offchain resolvers (.box via 3DNS).
-// If ENS ships a v4 UR, old deployments keep working — bumping is optional.
-const UNIVERSAL_RESOLVER_ADDRESS = '0x5a9236e72a66d3e08b83dcf489b4d850792b6009';
+const UNIVERSAL_RESOLVER_ADDRESS = '0xeEeEEEeE14D718C2B47D9923Deab1335E144EeEe';
 const UR_ABI = [
-  'function resolve(bytes name, bytes data) view returns (bytes resolvedData, address resolverAddress)',
-  'function resolveMulticall(bytes name, bytes[] calls) view returns (bytes[] results)',
-  'function reverse(bytes lookupAddress, uint256 coinType) view returns (string primaryName, address resolver, address reverseResolver)',
+  'function resolve(bytes name, bytes data) view returns (bytes result, address resolver)',
+  'function reverse(bytes lookupAddress, uint256 coinType) view returns (string primary, address resolver, address reverseResolver)',
 ];
 
 // bytes4(keccak256("contenthash(bytes32)"))
@@ -173,27 +173,38 @@ function isProviderError(err) {
 // Maximum retries for provider errors during resolution
 const MAX_RESOLUTION_RETRIES = 3;
 
-// UR reverts with these custom errors when a name has no resolver, its
-// resolver isn't a contract, or the name can't be reached. Callers want
-// to treat all of them as "not found".
+// Canonical UR custom errors we classify. ethers v6 surfaces the 4-byte
+// selector via err.data on CALL_EXCEPTION; some wrappers (JSON-RPC
+// proxies) expose it under err.info.error.data instead — check both.
+// Selectors are bytes4(keccak256(signature)).
 //
-// ethers v6 surfaces the 4-byte selector via err.data on CALL_EXCEPTION;
-// some wrappers (JSON-RPC proxies) expose it under err.info.error.data
-// instead. Check both.
+// https://docs.ens.domains/resolvers/universal/
 const UR_NOT_FOUND_SELECTORS = new Set([
   '0x77209fe8', // ResolverNotFound(bytes)
   '0x1e9535f2', // ResolverNotContract(bytes,address)
-  '0x5fe9a5df', // UnreachableName(bytes)
 ]);
+const REVERSE_MISMATCH_SELECTOR = '0xef9c03ce'; // ReverseAddressMismatch(string,bytes)
+
+function urErrorSelector(err) {
+  const data = err?.data || err?.info?.error?.data || '';
+  if (typeof data !== 'string' || data.length < 10) return null;
+  return data.slice(0, 10).toLowerCase();
+}
 
 function isResolverNotFoundError(err) {
   const msg = err?.message || '';
-  const data = err?.data || err?.info?.error?.data || '';
-  if (/ResolverNotFound|ResolverNotContract|UnreachableName/i.test(msg)) return true;
-  if (typeof data === 'string' && data.length >= 10) {
-    return UR_NOT_FOUND_SELECTORS.has(data.slice(0, 10).toLowerCase());
-  }
-  return false;
+  if (/ResolverNotFound|ResolverNotContract/i.test(msg)) return true;
+  const sel = urErrorSelector(err);
+  return sel !== null && UR_NOT_FOUND_SELECTORS.has(sel);
+}
+
+// UR.reverse reverts with this when the claimed primary name doesn't
+// forward-resolve back to the input address. Semantically: spoofed or
+// stale reverse record.
+function isReverseAddressMismatchError(err) {
+  const msg = err?.message || '';
+  if (/ReverseAddressMismatch/i.test(msg)) return true;
+  return urErrorSelector(err) === REVERSE_MISMATCH_SELECTOR;
 }
 
 // Call the Universal Resolver's resolve(name, data). `callData` is the raw
@@ -215,25 +226,6 @@ async function universalResolverCall(provider, name, callData) {
     enableCcipRead: true,
   });
   return { resolvedData, resolverAddress };
-}
-
-// Batch multiple resolver lookups on the same ENS name through the UR.
-// Each `callData` entry is a resolver function selector + args (e.g. addr
-// + text + contenthash for a profile view). Returns an array of the
-// per-call inner bytes, in order — each is the resolver's raw response
-// that the caller can then ABI-decode for its specific return type.
-//
-// Unlike the single-call helper, this does not return the resolver
-// address — the UR's resolveMulticall signature doesn't expose it.
-async function universalResolverMulticall(provider, name, callDatas) {
-  const ur = new ethers.Contract(UNIVERSAL_RESOLVER_ADDRESS, UR_ABI, provider);
-  const encodedName = ethers.dnsEncode(name, 255);
-  const results = await ur.resolveMulticall(encodedName, callDatas, {
-    enableCcipRead: true,
-  });
-  // Each entry is the raw ABI-encoded response of the Nth call — caller
-  // decodes per each call's return type.
-  return [...results];
 }
 
 async function resolveEnsContent(name) {
@@ -461,11 +453,10 @@ function cacheAndLog(cache, normalized, result, okValue) {
   return result;
 }
 
-// Resolve an address to its ENS primary name, forward-verifying the
-// result. Conservative: returns { success: true, name } ONLY when the
-// claimed reverse name resolves its own addr record back to the same
-// address. Reverse records are user-set and spoofable; anyone can claim
-// any name, so the forward-verify is the only way to trust the output.
+// Resolve an address to its ENS primary name. The UR verifies the reverse
+// record forward-resolves back to the input address internally and reverts
+// with ReverseAddressMismatch if not — so a successful return is already
+// a trusted name. Spoofed/stale reverses surface as UNVERIFIED.
 async function resolveEnsReverse(address) {
   if (typeof address !== 'string' || !/^0x[a-fA-F0-9]{40}$/.test(address)) {
     return {
@@ -475,9 +466,6 @@ async function resolveEnsReverse(address) {
       error: `Invalid address: ${address}`,
     };
   }
-  // Address is already validated — delegate cache/retry plumbing to the
-  // shared helper. trim() + lowercase inside are no-ops on a canonical
-  // lowercased 40-hex address.
   return resolveWithCache(address, ensReverseCache, doResolveEnsReverse, 'reverse');
 }
 
@@ -495,6 +483,14 @@ async function doResolveEnsReverse(normalizedAddress) {
     if (isResolverNotFoundError(err)) {
       return cacheReverseResult(normalizedAddress, noReverseResult(normalizedAddress));
     }
+    if (isReverseAddressMismatchError(err)) {
+      return cacheReverseResult(normalizedAddress, {
+        success: false,
+        address: normalizedAddress,
+        reason: 'UNVERIFIED',
+        error: `Reverse record for ${normalizedAddress} does not forward-verify`,
+      });
+    }
     log.info(`[ens] UR reverse failed for ${normalizedAddress}: ${err.message}`);
     return cacheReverseResult(normalizedAddress, {
       success: false,
@@ -506,21 +502,6 @@ async function doResolveEnsReverse(normalizedAddress) {
 
   if (!claimedName) {
     return cacheReverseResult(normalizedAddress, noReverseResult(normalizedAddress));
-  }
-
-  // Otherwise the reverse is spoofed or stale — reject.
-  const forward = await resolveEnsAddress(claimedName);
-  if (!forward.success || forward.address.toLowerCase() !== normalizedAddress.toLowerCase()) {
-    return cacheReverseResult(normalizedAddress, {
-      success: false,
-      address: normalizedAddress,
-      // Deliberately verbose key so a naive UI can't mistake it for the
-      // verified name — callers reading `.claimedUnverifiedName` know it
-      // failed forward-verify and must not render it as the recipient.
-      claimedUnverifiedName: claimedName,
-      reason: 'UNVERIFIED',
-      error: `Reverse record ${claimedName} does not forward-verify to ${normalizedAddress}`,
-    });
   }
 
   return cacheReverseResult(normalizedAddress, {
@@ -642,6 +623,5 @@ module.exports = {
   testRpcUrl,
   invalidateCachedProvider,
   universalResolverCall,
-  universalResolverMulticall,
   isResolverNotFoundError,
 };
