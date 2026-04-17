@@ -38,6 +38,7 @@ jest.mock('ethers', () => {
       AbiCoder: actual.AbiCoder,
       encodeBase58: actual.encodeBase58,
       decodeBase58: actual.decodeBase58,
+      ZeroAddress: actual.ZeroAddress,
     },
   };
 });
@@ -92,6 +93,13 @@ function ipnsContenthashFor(base58Hash) {
 }
 function swarmContenthashFor(hash64Hex) {
   return '0xe40101fa011b20' + hash64Hex;
+}
+
+// Wrap an address as the UR's return where `bytes` is the ABI-encoded
+// `address` output of the resolver's addr(bytes32).
+function urReturnsAddress(address) {
+  const inner = actualEthers.AbiCoder.defaultAbiCoder().encode(['address'], [address]);
+  return urReturnsBytes(inner);
 }
 
 describe('ens-resolver', () => {
@@ -296,13 +304,6 @@ describe('ens-resolver', () => {
   });
 
   describe('resolveEnsAddress', () => {
-    // Wrap an address as the UR's (bytes, address) return value where `bytes`
-    // is the ABI-encoded `address` output of the resolver's addr(bytes32).
-    function urReturnsAddress(address) {
-      const inner = actualEthers.AbiCoder.defaultAbiCoder().encode(['address'], [address]);
-      return urReturnsBytes(inner);
-    }
-
     test('resolves ENS name to its addr record', async () => {
       mockUrResolve.mockResolvedValue(
         urReturnsAddress('0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045')

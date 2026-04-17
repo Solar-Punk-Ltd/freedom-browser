@@ -20,8 +20,6 @@ const UR_ABI = [
 const CONTENTHASH_SELECTOR = '0xbc1c4a73';
 // bytes4(keccak256("addr(bytes32)"))
 const ADDR_SELECTOR = '0x3b3b57de';
-// 32-byte zero-padded address(0) — ABI-encoded `address` result for "no addr record set".
-const ZERO_ADDR_BYTES = '0x' + '0'.repeat(64);
 
 // ENS contenthash byte patterns (EIP-1577). We preserve the CIDv0 base58
 // output ("QmFoo…") for IPFS/IPNS to stay byte-compatible with the
@@ -203,6 +201,9 @@ async function universalResolverCall(provider, name, callData) {
 // + text + contenthash for a profile view). Returns an array of the
 // per-call inner bytes, in order — each is the resolver's raw response
 // that the caller can then ABI-decode for its specific return type.
+//
+// Unlike the single-call helper, this does not return the resolver
+// address — the UR's resolveMulticall signature doesn't expose it.
 async function universalResolverMulticall(provider, name, callDatas) {
   const ur = new ethers.Contract(UNIVERSAL_RESOLVER_ADDRESS, UR_ABI, provider);
   const encodedName = ethers.dnsEncode(name, 255);
@@ -214,45 +215,7 @@ async function universalResolverMulticall(provider, name, callDatas) {
 }
 
 async function resolveEnsContent(name) {
-  const trimmed = (name || '').trim();
-  if (!trimmed) {
-    throw new Error('ENS name is empty');
-  }
-
-  // Basic normalization; full ENS nameprep is more complex but this is fine
-  // for normal .eth and .box names.
-  const normalized = trimmed.toLowerCase();
-  log.info(`[ens] Resolving: ${normalized}`);
-
-  // Check cache first
-  const cached = ensResultCache.get(normalized);
-  if (cached && Date.now() - cached.timestamp < ENS_CACHE_TTL_MS) {
-    log.info(`[ens] Cache hit for ${normalized} → ${cached.result.uri || cached.result.reason}`);
-    return cached.result;
-  }
-
-  // Retry loop for provider errors
-  let lastError;
-  for (let attempt = 1; attempt <= MAX_RESOLUTION_RETRIES; attempt++) {
-    try {
-      return await doResolveEnsContent(normalized);
-    } catch (err) {
-      lastError = err;
-      if (isProviderError(err) && attempt < MAX_RESOLUTION_RETRIES) {
-        log.warn(
-          `[ens] Provider error on attempt ${attempt}/${MAX_RESOLUTION_RETRIES}: ${err.message}`
-        );
-        invalidateCachedProvider();
-        // Continue to next attempt
-      } else {
-        // Not a provider error or out of retries - rethrow
-        throw err;
-      }
-    }
-  }
-
-  // Should not reach here, but just in case
-  throw lastError;
+  return resolveWithCache(name, ensResultCache, doResolveEnsContent, 'content');
 }
 
 async function doResolveEnsContent(normalized) {
@@ -338,41 +301,42 @@ function parseContentHashBytes(hex0x) {
 }
 
 function cacheContentResult(normalized, result) {
-  ensResultCache.set(normalized, { result, timestamp: Date.now() });
-  if (result.type === 'ok') {
-    log.info(`[ens] Resolved: ${normalized} → ${result.uri}`);
-  } else {
-    log.info(`[ens] ${result.reason} for ${normalized}`);
-  }
-  return result;
+  return cacheAndLog(ensResultCache, normalized, result, result.uri);
 }
 
 // Resolve an ENS name's primary ETH address (the `addr` record).
 // Single UR call (vs ethers' registry → addr 2-step flow); CCIP-Read
 // handled transparently via OffchainLookup.
 async function resolveEnsAddress(name) {
+  return resolveWithCache(name, ensAddressCache, doResolveEnsAddress, 'addr');
+}
+
+// Shared validation + cache + retry wrapper for the content-hash and
+// addr lookup paths. Both do the same thing: trim, lowercase, check the
+// same-shape TTL cache, retry up to MAX_RESOLUTION_RETRIES on provider
+// errors, invalidate the cached provider between attempts.
+async function resolveWithCache(name, cache, doResolve, label) {
   const trimmed = (name || '').trim();
   if (!trimmed) {
     throw new Error('ENS name is empty');
   }
-
   const normalized = trimmed.toLowerCase();
 
-  const cached = ensAddressCache.get(normalized);
+  const cached = cache.get(normalized);
   if (cached && Date.now() - cached.timestamp < ENS_CACHE_TTL_MS) {
-    log.info(`[ens] Address cache hit for ${normalized} → ${cached.result.address || cached.result.reason}`);
+    log.info(`[ens] ${label} cache hit for ${normalized}`);
     return cached.result;
   }
 
   let lastError;
   for (let attempt = 1; attempt <= MAX_RESOLUTION_RETRIES; attempt++) {
     try {
-      return await doResolveEnsAddress(normalized);
+      return await doResolve(normalized);
     } catch (err) {
       lastError = err;
       if (isProviderError(err) && attempt < MAX_RESOLUTION_RETRIES) {
         log.warn(
-          `[ens] Address resolution provider error on attempt ${attempt}/${MAX_RESOLUTION_RETRIES}: ${err.message}`
+          `[ens] ${label} provider error on attempt ${attempt}/${MAX_RESOLUTION_RETRIES}: ${err.message}`
         );
         invalidateCachedProvider();
         continue;
@@ -380,7 +344,6 @@ async function resolveEnsAddress(name) {
       throw err;
     }
   }
-
   throw lastError;
 }
 
@@ -395,12 +358,7 @@ async function doResolveEnsAddress(normalized) {
   } catch (err) {
     if (isProviderError(err)) throw err;
     if (isResolverNotFoundError(err)) {
-      return cacheAddressResult(normalized, {
-        success: false,
-        name: normalized,
-        reason: 'NO_ADDRESS',
-        error: `No address record set for ${normalized}`,
-      });
+      return cacheAddressResult(normalized, noAddressResult(normalized));
     }
     log.info(`[ens] UR addr resolve failed for ${normalized}: ${err.message}`);
     return cacheAddressResult(normalized, {
@@ -411,15 +369,8 @@ async function doResolveEnsAddress(normalized) {
     });
   }
 
-  // The resolver's addr(bytes32) returns address — 32 bytes of ABI-encoded
-  // address. Empty or zero → no addr record set.
-  if (!urResult.bytes || urResult.bytes === '0x' || urResult.bytes === ZERO_ADDR_BYTES) {
-    return cacheAddressResult(normalized, {
-      success: false,
-      name: normalized,
-      reason: 'NO_ADDRESS',
-      error: `No address record set for ${normalized}`,
-    });
+  if (!urResult.bytes || urResult.bytes === '0x') {
+    return cacheAddressResult(normalized, noAddressResult(normalized));
   }
 
   let address;
@@ -435,6 +386,10 @@ async function doResolveEnsAddress(normalized) {
     });
   }
 
+  if (address === ethers.ZeroAddress) {
+    return cacheAddressResult(normalized, noAddressResult(normalized));
+  }
+
   return cacheAddressResult(normalized, {
     success: true,
     name: normalized,
@@ -442,10 +397,26 @@ async function doResolveEnsAddress(normalized) {
   });
 }
 
+function noAddressResult(normalized) {
+  return {
+    success: false,
+    name: normalized,
+    reason: 'NO_ADDRESS',
+    error: `No address record set for ${normalized}`,
+  };
+}
+
 function cacheAddressResult(normalized, result) {
-  ensAddressCache.set(normalized, { result, timestamp: Date.now() });
-  if (result.success) {
-    log.info(`[ens] Resolved address: ${normalized} → ${result.address}`);
+  return cacheAndLog(ensAddressCache, normalized, result, result.address);
+}
+
+// Shared cache-set + log-and-return for both lookup paths. `okValue` is
+// the success-case display (uri for content, address for addr); passing
+// a truthy value logs "Resolved → <value>", otherwise logs the reason.
+function cacheAndLog(cache, normalized, result, okValue) {
+  cache.set(normalized, { result, timestamp: Date.now() });
+  if (okValue) {
+    log.info(`[ens] Resolved: ${normalized} → ${okValue}`);
   } else {
     log.info(`[ens] ${result.reason} for ${normalized}`);
   }
