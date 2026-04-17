@@ -13,6 +13,7 @@ const { loadSettings } = require('./settings-store');
 const UNIVERSAL_RESOLVER_ADDRESS = '0x5a9236e72a66d3e08b83dcf489b4d850792b6009';
 const UR_ABI = [
   'function resolve(bytes name, bytes data) view returns (bytes resolvedData, address resolverAddress)',
+  'function resolveMulticall(bytes name, bytes[] calls) view returns (bytes[] results)',
 ];
 
 // bytes4(keccak256("contenthash(bytes32)"))
@@ -195,6 +196,21 @@ async function universalResolverCall(provider, name, callData) {
   // UR returns the resolver's ABI-encoded response as `bytes`; unwrap it.
   const [bytes] = ethers.AbiCoder.defaultAbiCoder().decode(['bytes'], resolvedData);
   return { bytes, resolverAddress };
+}
+
+// Batch multiple resolver lookups on the same ENS name through the UR.
+// Each `callData` entry is a resolver function selector + args (e.g. addr
+// + text + contenthash for a profile view). Returns an array of the
+// per-call inner bytes, in order — each is the resolver's raw response
+// that the caller can then ABI-decode for its specific return type.
+async function universalResolverMulticall(provider, name, callDatas) {
+  const ur = new ethers.Contract(UNIVERSAL_RESOLVER_ADDRESS, UR_ABI, provider);
+  const encodedName = ethers.dnsEncode(name, 255);
+  const results = await ur.resolveMulticall(encodedName, callDatas, {
+    enableCcipRead: true,
+  });
+  const coder = ethers.AbiCoder.defaultAbiCoder();
+  return results.map((r) => coder.decode(['bytes'], r)[0]);
 }
 
 async function resolveEnsContent(name) {
@@ -519,5 +535,6 @@ module.exports = {
   testRpcUrl,
   invalidateCachedProvider,
   universalResolverCall,
+  universalResolverMulticall,
   isResolverNotFoundError,
 };

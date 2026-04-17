@@ -15,6 +15,7 @@ const mockDestroy = jest.fn();
 const mockGetResolver = jest.fn();
 const mockResolveName = jest.fn();
 const mockUrResolve = jest.fn();
+const mockUrResolveMulticall = jest.fn();
 
 jest.mock('ethers', () => {
   const actual = jest.requireActual('ethers').ethers;
@@ -28,6 +29,7 @@ jest.mock('ethers', () => {
       })),
       Contract: jest.fn().mockImplementation(() => ({
         resolve: mockUrResolve,
+        resolveMulticall: mockUrResolveMulticall,
       })),
       // Pure helpers — use the real implementations so the UR helper's
       // encoding and the inline contenthash decoder are actually exercised.
@@ -47,6 +49,7 @@ const {
   testRpcUrl,
   invalidateCachedProvider,
   universalResolverCall,
+  universalResolverMulticall,
   isResolverNotFoundError,
 } = require('./ens-resolver');
 
@@ -517,6 +520,51 @@ describe('ens-resolver', () => {
       const provider = new ethers.JsonRpcProvider('http://localhost:8545');
       await expect(
         universalResolverCall(provider, 'unregistered.eth', '0xbc1c4a73')
+      ).rejects.toThrow('ResolverNotFound');
+    });
+  });
+
+  describe('universalResolverMulticall', () => {
+    test('encodes name, opts into CCIP-Read, and unwraps per-call inner bytes', async () => {
+      const coder = actualEthers.AbiCoder.defaultAbiCoder();
+      // Simulate three resolver responses (e.g. addr + text + contenthash).
+      const inner1 = '0xdeadbeef';
+      const inner2 = '0xfeedface';
+      const inner3 = '0x';
+      mockUrResolveMulticall.mockResolvedValue([
+        coder.encode(['bytes'], [inner1]),
+        coder.encode(['bytes'], [inner2]),
+        coder.encode(['bytes'], [inner3]),
+      ]);
+
+      const provider = new ethers.JsonRpcProvider('http://localhost:8545');
+      const calls = ['0x3b3b57de', '0xbc1c4a73', '0x59d1d43c'];
+      const results = await universalResolverMulticall(provider, 'vitalik.eth', calls);
+
+      expect(results.map((r) => r.toLowerCase())).toEqual([inner1, inner2, inner3]);
+
+      expect(mockUrResolveMulticall).toHaveBeenCalledTimes(1);
+      const [encodedName, passedCalls, overrides] = mockUrResolveMulticall.mock.calls[0];
+      expect(encodedName).toBe(actualEthers.dnsEncode('vitalik.eth', 255));
+      expect(passedCalls).toEqual(calls);
+      expect(overrides).toEqual({ enableCcipRead: true });
+    });
+
+    test('handles empty calls array', async () => {
+      mockUrResolveMulticall.mockResolvedValue([]);
+
+      const provider = new ethers.JsonRpcProvider('http://localhost:8545');
+      const results = await universalResolverMulticall(provider, 'vitalik.eth', []);
+
+      expect(results).toEqual([]);
+    });
+
+    test('propagates reverts to the caller', async () => {
+      mockUrResolveMulticall.mockRejectedValue(new Error('execution reverted: ResolverNotFound'));
+
+      const provider = new ethers.JsonRpcProvider('http://localhost:8545');
+      await expect(
+        universalResolverMulticall(provider, 'unreg.eth', ['0x3b3b57de'])
       ).rejects.toThrow('ResolverNotFound');
     });
   });
