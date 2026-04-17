@@ -13,19 +13,47 @@ jest.mock('./settings-store', () => ({
 const mockGetBlockNumber = jest.fn();
 const mockDestroy = jest.fn();
 const mockGetResolver = jest.fn();
+const mockResolveName = jest.fn();
+const mockUrResolve = jest.fn();
+const mockUrReverse = jest.fn();
 
-jest.mock('ethers', () => ({
-  ethers: {
-    JsonRpcProvider: jest.fn().mockImplementation(() => ({
-      getBlockNumber: mockGetBlockNumber,
-      getResolver: mockGetResolver,
-      destroy: mockDestroy,
-    })),
-  },
-}));
+jest.mock('ethers', () => {
+  const actual = jest.requireActual('ethers').ethers;
+  return {
+    ethers: {
+      JsonRpcProvider: jest.fn().mockImplementation(() => ({
+        getBlockNumber: mockGetBlockNumber,
+        getResolver: mockGetResolver,
+        resolveName: mockResolveName,
+        destroy: mockDestroy,
+      })),
+      Contract: jest.fn().mockImplementation(() => ({
+        resolve: mockUrResolve,
+        reverse: mockUrReverse,
+      })),
+      // Pure helpers — use the real implementations so the UR helper's
+      // encoding and the inline contenthash decoder are actually exercised.
+      dnsEncode: actual.dnsEncode,
+      namehash: actual.namehash,
+      AbiCoder: actual.AbiCoder,
+      encodeBase58: actual.encodeBase58,
+      decodeBase58: actual.decodeBase58,
+      getBytes: actual.getBytes,
+      ZeroAddress: actual.ZeroAddress,
+    },
+  };
+});
 
 const { ethers } = require('ethers');
-const { resolveEnsContent, testRpcUrl, invalidateCachedProvider } = require('./ens-resolver');
+const {
+  resolveEnsContent,
+  resolveEnsAddress,
+  resolveEnsReverse,
+  testRpcUrl,
+  invalidateCachedProvider,
+  universalResolverCall,
+  isResolverNotFoundError,
+} = require('./ens-resolver');
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -34,39 +62,79 @@ beforeEach(() => {
   mockGetBlockNumber.mockResolvedValue(12345678);
   // Default: resolver returns null (no resolver found)
   mockGetResolver.mockResolvedValue(null);
+  // Default: resolveName returns null (no addr record)
+  mockResolveName.mockResolvedValue(null);
   // Default: no custom RPC
   mockLoadSettings.mockReturnValue({ enableEnsCustomRpc: false, ensRpcUrl: '' });
 });
 
-describe('ens-resolver', () => {
-  describe('.box domain resolution', () => {
-    test('resolves .box domain with IPFS content hash', async () => {
-      mockGetResolver.mockResolvedValue({
-        getContentHash: jest
-          .fn()
-          .mockResolvedValue('ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG'),
-        address: '0xF97aAc6C8dbaEBCB54ff166d79706E3AF7a813c8',
-      });
+// Helpers for building mocked UR responses. The UR returns
+// [resolvedData, resolverAddress] where resolvedData is the RAW
+// ABI-encoded response of the resolver function — its shape depends
+// on that function's return type. For `contenthash() returns (bytes)`
+// it's ABI-encoded `(bytes)`; for `addr() returns (address)` it's the
+// 32-byte address directly. Each helper mirrors one of those shapes.
+const actualEthers = jest.requireActual('ethers').ethers;
+const FAKE_RESOLVER = '0x0000000000000000000000000000000000001234';
 
-      const result = await resolveEnsContent('fleek.box');
+// For contenthash-like (dynamic `bytes` return): wrap inner hex as ABI (bytes).
+function urReturnsBytes(innerHex) {
+  const wrapped = actualEthers.AbiCoder.defaultAbiCoder().encode(['bytes'], [innerHex]);
+  return [wrapped, FAKE_RESOLVER];
+}
+
+// Build real ENS contenthash bytes for each codec we support. These are the
+// exact byte patterns a resolver's contenthash(bytes32) would return on
+// mainnet — we feed them through the UR mock so the real regex decoder runs.
+// decodeBase58 returns a BigInt; for CIDv0 "Qm…" it always has a leading
+// 0x12, so .toString(16) yields the full 68-char multihash (no leading-zero
+// loss). padStart is a defensive lower bound.
+function ipfsContenthashFor(base58Hash) {
+  const multihashHex = actualEthers.decodeBase58(base58Hash).toString(16).padStart(68, '0');
+  return '0xe3010170' + multihashHex;
+}
+function ipnsContenthashFor(base58Hash) {
+  const multihashHex = actualEthers.decodeBase58(base58Hash).toString(16).padStart(68, '0');
+  return '0xe5010172' + multihashHex;
+}
+function swarmContenthashFor(hash64Hex) {
+  return '0xe40101fa011b20' + hash64Hex;
+}
+
+// For addr-like (static `address` return): the UR's resolvedData is just
+// the 32-byte ABI-encoded address. No bytes-wrapper.
+function urReturnsAddress(address) {
+  const encoded = actualEthers.AbiCoder.defaultAbiCoder().encode(['address'], [address]);
+  return [encoded, FAKE_RESOLVER];
+}
+
+describe('ens-resolver', () => {
+  describe('resolveEnsContent', () => {
+    // Real IPFS v0 hash (34 bytes: 0x12 0x20 + 32-byte digest). Using a known
+    // valid CID here so encodeBase58 round-trips cleanly.
+    const IPFS_V0 = 'QmW81r84Aihiqqi2Jw6nM1LnpeMfRCenRxtjwHNkXVkZYa';
+
+    test('decodes ipfs contenthash and returns CIDv0 base58 URI', async () => {
+      mockUrResolve.mockResolvedValue(urReturnsBytes(ipfsContenthashFor(IPFS_V0)));
+
+      const result = await resolveEnsContent('vitalik.eth');
+
       expect(result).toEqual({
         type: 'ok',
-        name: 'fleek.box',
+        name: 'vitalik.eth',
         codec: 'ipfs-ns',
         protocol: 'ipfs',
-        uri: 'ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG',
-        decoded: 'QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG',
+        uri: `ipfs://${IPFS_V0}`,
+        decoded: IPFS_V0,
       });
     });
 
-    test('resolves .box domain with Swarm content hash', async () => {
+    test('decodes swarm contenthash', async () => {
       const swarmHash = 'a'.repeat(64);
-      mockGetResolver.mockResolvedValue({
-        getContentHash: jest.fn().mockResolvedValue(`bzz://${swarmHash}`),
-        address: '0xF97aAc6C8dbaEBCB54ff166d79706E3AF7a813c8',
-      });
+      mockUrResolve.mockResolvedValue(urReturnsBytes(swarmContenthashFor(swarmHash)));
 
       const result = await resolveEnsContent('mysite.box');
+
       expect(result).toEqual({
         type: 'ok',
         name: 'mysite.box',
@@ -77,243 +145,422 @@ describe('ens-resolver', () => {
       });
     });
 
-    test('resolves .box domain with IPNS content hash', async () => {
-      mockGetResolver.mockResolvedValue({
-        getContentHash: jest
-          .fn()
-          .mockResolvedValue(
-            'ipns://k51qzi5uqu5dlvj2baxnqndepeb86cbk3lg7ekjjnof1ock2yxz7p8q1qf2v9o'
-          ),
-        address: '0xF97aAc6C8dbaEBCB54ff166d79706E3AF7a813c8',
-      });
+    test('decodes ipns contenthash', async () => {
+      mockUrResolve.mockResolvedValue(urReturnsBytes(ipnsContenthashFor(IPFS_V0)));
 
       const result = await resolveEnsContent('dynamic.box');
+
+      expect(result.type).toBe('ok');
+      expect(result.protocol).toBe('ipns');
+      expect(result.uri).toBe(`ipns://${IPFS_V0}`);
+      expect(result.codec).toBe('ipns-ns');
+    });
+
+    test('maps UR ResolverNotFound revert to NO_RESOLVER', async () => {
+      mockUrResolve.mockRejectedValue(new Error('execution reverted: ResolverNotFound("unreg.box")'));
+
+      const result = await resolveEnsContent('unreg.box');
+
       expect(result).toEqual({
-        type: 'ok',
-        name: 'dynamic.box',
-        codec: 'ipns-ns',
-        protocol: 'ipns',
-        uri: 'ipns://k51qzi5uqu5dlvj2baxnqndepeb86cbk3lg7ekjjnof1ock2yxz7p8q1qf2v9o',
-        decoded: 'k51qzi5uqu5dlvj2baxnqndepeb86cbk3lg7ekjjnof1ock2yxz7p8q1qf2v9o',
+        type: 'not_found',
+        reason: 'NO_RESOLVER',
+        name: 'unreg.box',
       });
     });
 
-    test('returns not_found when .box domain has no resolver', async () => {
-      mockGetResolver.mockResolvedValue(null);
-
-      const result = await resolveEnsContent('unregistered.box');
-      expect(result.type).toBe('not_found');
-      expect(result.reason).toBe('NO_RESOLVER');
-      expect(result.name).toBe('unregistered.box');
-    });
-
-    test('returns not_found when .box domain has no content hash (CCIP 404)', async () => {
-      mockGetResolver.mockResolvedValue({
-        getContentHash: jest
-          .fn()
-          .mockRejectedValue(
-            new Error(
-              'response not found during CCIP fetch: 3dnsService:: InvalidParameters: CCIP_001'
-            )
-          ),
-        address: '0xF97aAc6C8dbaEBCB54ff166d79706E3AF7a813c8',
-      });
+    test('maps generic UR revert to NO_CONTENTHASH', async () => {
+      mockUrResolve.mockRejectedValue(
+        new Error('response not found during CCIP fetch: 3dnsService:: CCIP_001')
+      );
 
       const result = await resolveEnsContent('nocontent.box');
+
       expect(result.type).toBe('not_found');
       expect(result.reason).toBe('NO_CONTENTHASH');
-      expect(result.name).toBe('nocontent.box');
       expect(result.error).toContain('CCIP');
     });
 
-    test('returns not_found when .box domain has empty content hash', async () => {
-      mockGetResolver.mockResolvedValue({
-        getContentHash: jest.fn().mockResolvedValue(null),
-        address: '0xF97aAc6C8dbaEBCB54ff166d79706E3AF7a813c8',
-      });
+    test('returns EMPTY_CONTENTHASH for empty 0x return', async () => {
+      mockUrResolve.mockResolvedValue(urReturnsBytes('0x'));
 
       const result = await resolveEnsContent('empty.box');
-      expect(result.type).toBe('not_found');
-      expect(result.reason).toBe('EMPTY_CONTENTHASH');
-      expect(result.name).toBe('empty.box');
+
+      expect(result).toEqual({
+        type: 'not_found',
+        reason: 'EMPTY_CONTENTHASH',
+        name: 'empty.box',
+      });
     });
 
-    test('normalizes .box domain to lowercase', async () => {
-      mockGetResolver.mockResolvedValue({
-        getContentHash: jest.fn().mockResolvedValue('ipfs://QmTest123'),
-        address: '0xF97aAc6C8dbaEBCB54ff166d79706E3AF7a813c8',
-      });
+    test('returns UNSUPPORTED_CONTENTHASH_FORMAT for unknown bytes', async () => {
+      // Arweave codec (0xb29910 varint) — valid contenthash but not supported.
+      mockUrResolve.mockResolvedValue(urReturnsBytes('0xb29910' + 'cd'.repeat(30)));
 
-      const result = await resolveEnsContent('MyDomain.BOX');
-      expect(result.name).toBe('mydomain.box');
+      const result = await resolveEnsContent('arweave.box');
+
+      expect(result.type).toBe('unsupported');
+      expect(result.reason).toBe('UNSUPPORTED_CONTENTHASH_FORMAT');
+      expect(result.name).toBe('arweave.box');
+    });
+
+    test('normalizes mixed-case input to lowercase', async () => {
+      mockUrResolve.mockResolvedValue(urReturnsBytes(ipfsContenthashFor(IPFS_V0)));
+
+      const result = await resolveEnsContent('Vitalik.ETH');
+
+      expect(result.name).toBe('vitalik.eth');
       expect(result.type).toBe('ok');
     });
-  });
 
-  describe('.eth domain resolution', () => {
-    test('resolves .eth domain with IPFS content hash', async () => {
-      mockGetResolver.mockResolvedValue({
-        getContentHash: jest
-          .fn()
-          .mockResolvedValue('ipfs://QmW81r84Aihiqqi2Jw6nM1LnpeMfRCenRxtjwHNkXVkZYa'),
-        address: '0x4976fb03C32e5B8cfe2b6cCB31c09Ba78EBaBa41',
-      });
+    // Unicode names need full UTS-46 / ENSIP-15 normalization, not bare
+    // lowercase — otherwise namehash is computed against an unnormalized
+    // form and the resolver lookup silently misses.
+    test('normalizes unicode names via ENSIP-15', async () => {
+      mockUrResolve.mockResolvedValue(urReturnsBytes(ipfsContenthashFor(IPFS_V0)));
 
-      const result = await resolveEnsContent('vitalik.eth');
-      expect(result).toEqual({
-        type: 'ok',
-        name: 'vitalik.eth',
-        codec: 'ipfs-ns',
-        protocol: 'ipfs',
-        uri: 'ipfs://QmW81r84Aihiqqi2Jw6nM1LnpeMfRCenRxtjwHNkXVkZYa',
-        decoded: 'QmW81r84Aihiqqi2Jw6nM1LnpeMfRCenRxtjwHNkXVkZYa',
-      });
+      const result = await resolveEnsContent('nic🦊.eth');
+
+      expect(result.type).toBe('ok');
+      expect(result.name).toBe('nic🦊.eth');
     });
-  });
 
-  describe('error handling', () => {
+    test('throws on invalid ENS label (e.g. mid-label underscore)', async () => {
+      await expect(resolveEnsContent('invalid_label.eth')).rejects.toThrow(/underscore/i);
+    });
+
     test('throws on empty name', async () => {
       await expect(resolveEnsContent('')).rejects.toThrow('ENS name is empty');
-    });
-
-    test('throws on whitespace-only name', async () => {
       await expect(resolveEnsContent('   ')).rejects.toThrow('ENS name is empty');
     });
 
-    test('retries on provider error', async () => {
+    test('retries on provider error then succeeds', async () => {
       const providerError = new Error('server error');
       providerError.code = 'SERVER_ERROR';
 
-      // First attempt fails with provider error, second succeeds
-      const mockContentHash = jest
-        .fn()
+      mockUrResolve
         .mockRejectedValueOnce(providerError)
-        .mockResolvedValueOnce('ipfs://QmRetried');
-
-      mockGetResolver.mockResolvedValue({
-        getContentHash: mockContentHash,
-        address: '0xTest',
-      });
+        .mockResolvedValueOnce(urReturnsBytes(ipfsContenthashFor(IPFS_V0)));
 
       const result = await resolveEnsContent('retry.box');
+
       expect(result.type).toBe('ok');
-      expect(result.uri).toBe('ipfs://QmRetried');
+      expect(result.uri).toBe(`ipfs://${IPFS_V0}`);
+      expect(mockUrResolve).toHaveBeenCalledTimes(2);
     });
 
-    test('returns unsupported for unknown protocol', async () => {
-      mockGetResolver.mockResolvedValue({
-        getContentHash: jest.fn().mockResolvedValue('arweave://abc123'),
-        address: '0xTest',
-      });
+    test('caches successful resolutions', async () => {
+      mockUrResolve.mockResolvedValue(urReturnsBytes(ipfsContenthashFor(IPFS_V0)));
 
-      const result = await resolveEnsContent('arweave.box');
-      expect(result.type).toBe('unsupported');
-      expect(result.reason).toContain('UNSUPPORTED_PROTOCOL');
+      const first = await resolveEnsContent('cached.box');
+      const second = await resolveEnsContent('cached.box');
+
+      expect(first.type).toBe('ok');
+      expect(second.uri).toBe(`ipfs://${IPFS_V0}`);
+      expect(mockUrResolve).toHaveBeenCalledTimes(1);
     });
 
-    test('returns unsupported for malformed content hash', async () => {
-      mockGetResolver.mockResolvedValue({
-        getContentHash: jest.fn().mockResolvedValue('not-a-valid-uri'),
-        address: '0xTest',
-      });
+    test('makes exactly one UR call per cold resolution (perf regression guard)', async () => {
+      mockUrResolve.mockResolvedValue(urReturnsBytes(ipfsContenthashFor(IPFS_V0)));
 
-      const result = await resolveEnsContent('malformed.box');
-      expect(result.type).toBe('unsupported');
-      expect(result.reason).toBe('UNSUPPORTED_CONTENTHASH_FORMAT');
-    });
-  });
+      await resolveEnsContent('oneshot.eth');
 
-  describe('caching', () => {
-    test('returns cached result on second call', async () => {
-      mockGetResolver.mockResolvedValue({
-        getContentHash: jest.fn().mockResolvedValue('ipfs://QmCached'),
-        address: '0xTest',
-      });
-
-      const result1 = await resolveEnsContent('cached.box');
-      expect(result1.type).toBe('ok');
-
-      // Second call should use cache (resolver should only be called once)
-      const result2 = await resolveEnsContent('cached.box');
-      expect(result2.type).toBe('ok');
-      expect(result2.uri).toBe('ipfs://QmCached');
-
-      // getResolver called only once (second call used cache)
-      expect(mockGetResolver).toHaveBeenCalledTimes(1);
+      expect(mockUrResolve).toHaveBeenCalledTimes(1);
     });
   });
 
   describe('custom RPC URL', () => {
     test('uses custom RPC URL from settings when set', async () => {
-      mockLoadSettings.mockReturnValue({ enableEnsCustomRpc: true, ensRpcUrl: 'http://localhost:8545' });
-      mockGetResolver.mockResolvedValue({
-        getContentHash: jest.fn().mockResolvedValue('ipfs://QmCustomRpc'),
-        address: '0xTest',
+      mockLoadSettings.mockReturnValue({
+        enableEnsCustomRpc: true,
+        ensRpcUrl: 'http://localhost:8545',
       });
+      mockUrResolve.mockResolvedValue(urReturnsBytes('0xe30101701220' + 'ab'.repeat(32)));
 
-      const result = await resolveEnsContent('custom.eth');
-      expect(result.type).toBe('ok');
+      await resolveEnsContent('custom.eth');
 
-      // JsonRpcProvider should have been called with custom URL first
       const calls = ethers.JsonRpcProvider.mock.calls;
       expect(calls[0][0]).toBe('http://localhost:8545');
     });
 
     test('falls back to public RPCs when custom RPC fails', async () => {
-      mockLoadSettings.mockReturnValue({ enableEnsCustomRpc: true, ensRpcUrl: 'http://localhost:8545' });
+      mockLoadSettings.mockReturnValue({
+        enableEnsCustomRpc: true,
+        ensRpcUrl: 'http://localhost:8545',
+      });
 
-      // First call (custom RPC) fails, second call (public) succeeds
       let callCount = 0;
       mockGetBlockNumber.mockImplementation(() => {
         callCount++;
-        if (callCount === 1) {
-          return Promise.reject(new Error('ECONNREFUSED'));
-        }
+        if (callCount === 1) return Promise.reject(new Error('ECONNREFUSED'));
         return Promise.resolve(12345678);
       });
 
-      mockGetResolver.mockResolvedValue({
-        getContentHash: jest.fn().mockResolvedValue('ipfs://QmFallback'),
-        address: '0xTest',
-      });
+      mockUrResolve.mockResolvedValue(urReturnsBytes('0xe30101701220' + 'ab'.repeat(32)));
 
-      const result = await resolveEnsContent('fallback.eth');
-      expect(result.type).toBe('ok');
-      expect(result.uri).toBe('ipfs://QmFallback');
+      await resolveEnsContent('fallback.eth');
 
-      // Should have tried custom URL first, then a public one
       expect(ethers.JsonRpcProvider).toHaveBeenCalledTimes(2);
       expect(ethers.JsonRpcProvider.mock.calls[0][0]).toBe('http://localhost:8545');
     });
 
     test('clearing custom RPC reverts to default behavior', async () => {
-      // Start with custom RPC
-      mockLoadSettings.mockReturnValue({ enableEnsCustomRpc: true, ensRpcUrl: 'http://localhost:8545' });
-      mockGetResolver.mockResolvedValue({
-        getContentHash: jest.fn().mockResolvedValue('ipfs://QmFirst'),
-        address: '0xTest',
+      mockLoadSettings.mockReturnValue({
+        enableEnsCustomRpc: true,
+        ensRpcUrl: 'http://localhost:8545',
       });
+      mockUrResolve.mockResolvedValue(urReturnsBytes('0xe30101701220' + 'ab'.repeat(32)));
 
       await resolveEnsContent('first.eth');
-      const firstUrl = ethers.JsonRpcProvider.mock.calls[0][0];
-      expect(firstUrl).toBe('http://localhost:8545');
+      expect(ethers.JsonRpcProvider.mock.calls[0][0]).toBe('http://localhost:8545');
 
-      // Disable custom RPC — cached provider URL won't match the new first provider,
-      // so getWorkingProvider will invalidate and re-connect
       jest.clearAllMocks();
       mockGetBlockNumber.mockResolvedValue(12345678);
       mockLoadSettings.mockReturnValue({ enableEnsCustomRpc: false, ensRpcUrl: '' });
       invalidateCachedProvider();
-      mockGetResolver.mockResolvedValue({
-        getContentHash: jest.fn().mockResolvedValue('ipfs://QmSecond'),
-        address: '0xTest',
-      });
+      mockUrResolve.mockResolvedValue(urReturnsBytes('0xe301017012' + 'cd'.repeat(34)));
 
       await resolveEnsContent('second.eth');
 
-      // Should use the first public provider, not localhost
-      const secondUrl = ethers.JsonRpcProvider.mock.calls[0][0];
-      expect(secondUrl).not.toBe('http://localhost:8545');
+      expect(ethers.JsonRpcProvider.mock.calls[0][0]).not.toBe('http://localhost:8545');
+    });
+  });
+
+  describe('resolveEnsAddress', () => {
+    test('resolves ENS name to its addr record', async () => {
+      mockUrResolve.mockResolvedValue(
+        urReturnsAddress('0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045')
+      );
+
+      const result = await resolveEnsAddress('vitalik.eth');
+
+      expect(result).toEqual({
+        success: true,
+        name: 'vitalik.eth',
+        address: '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045',
+      });
+    });
+
+    test('normalizes mixed-case input to lowercase', async () => {
+      mockUrResolve.mockResolvedValue(
+        urReturnsAddress('0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045')
+      );
+
+      const result = await resolveEnsAddress('Mixed.ETH');
+
+      expect(result.success).toBe(true);
+      expect(result.name).toBe('mixed.eth');
+    });
+
+    test('returns NO_ADDRESS for zero-address return (resolver says no addr set)', async () => {
+      mockUrResolve.mockResolvedValue(urReturnsAddress('0x0000000000000000000000000000000000000000'));
+
+      const result = await resolveEnsAddress('no-addr.eth');
+
+      expect(result).toEqual({
+        success: false,
+        name: 'no-addr.eth',
+        reason: 'NO_ADDRESS',
+        error: 'No address record set for no-addr.eth',
+      });
+    });
+
+    test('maps UR ResolverNotFound revert to NO_ADDRESS', async () => {
+      mockUrResolve.mockRejectedValue(
+        new Error('execution reverted: ResolverNotFound("unreg.eth")')
+      );
+
+      const result = await resolveEnsAddress('unreg.eth');
+
+      expect(result.success).toBe(false);
+      expect(result.reason).toBe('NO_ADDRESS');
+    });
+
+    test('maps generic UR revert to RESOLUTION_ERROR', async () => {
+      mockUrResolve.mockRejectedValue(new Error('some other revert reason'));
+
+      const result = await resolveEnsAddress('broken.eth');
+
+      expect(result.success).toBe(false);
+      expect(result.reason).toBe('RESOLUTION_ERROR');
+      expect(result.error).toContain('some other revert');
+    });
+
+    test('throws on empty name', async () => {
+      await expect(resolveEnsAddress('')).rejects.toThrow('ENS name is empty');
+      await expect(resolveEnsAddress('   ')).rejects.toThrow('ENS name is empty');
+    });
+
+    test('retries on provider error then succeeds', async () => {
+      const providerError = new Error('server error');
+      providerError.code = 'SERVER_ERROR';
+
+      mockUrResolve
+        .mockRejectedValueOnce(providerError)
+        .mockResolvedValueOnce(urReturnsAddress('0x0000000000000000000000000000000000000001'));
+
+      const result = await resolveEnsAddress('retry.eth');
+
+      expect(result.success).toBe(true);
+      expect(result.address).toBe('0x0000000000000000000000000000000000000001');
+      expect(mockUrResolve).toHaveBeenCalledTimes(2);
+    });
+
+    test('caches successful resolutions', async () => {
+      mockUrResolve.mockResolvedValue(
+        urReturnsAddress('0x1111111111111111111111111111111111111111')
+      );
+
+      const first = await resolveEnsAddress('cached-addr.eth');
+      const second = await resolveEnsAddress('cached-addr.eth');
+
+      expect(first.address).toBe('0x1111111111111111111111111111111111111111');
+      expect(second.address).toBe('0x1111111111111111111111111111111111111111');
+      expect(mockUrResolve).toHaveBeenCalledTimes(1);
+    });
+
+    test('caches negative results too (NO_ADDRESS misses)', async () => {
+      mockUrResolve.mockResolvedValue(urReturnsAddress('0x0000000000000000000000000000000000000000'));
+
+      const first = await resolveEnsAddress('no-addr-cached.eth');
+      const second = await resolveEnsAddress('no-addr-cached.eth');
+
+      expect(first.reason).toBe('NO_ADDRESS');
+      expect(second.reason).toBe('NO_ADDRESS');
+      // Second call hit the cache, no second RPC round-trip.
+      expect(mockUrResolve).toHaveBeenCalledTimes(1);
+    });
+
+    test('makes exactly one UR call per cold resolution (perf regression guard)', async () => {
+      mockUrResolve.mockResolvedValue(
+        urReturnsAddress('0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045')
+      );
+
+      await resolveEnsAddress('oneshot-addr.eth');
+
+      expect(mockUrResolve).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('resolveEnsReverse', () => {
+    const RESOLVER = '0x0000000000000000000000000000000000001234';
+    // Unique per-test addresses avoid ensReverseCache pollution across tests.
+    const addr = (n) => '0x' + String(n).padStart(40, '0');
+
+    test('returns verified name when UR resolves successfully', async () => {
+      // UR verifies forward-resolution internally before returning a name —
+      // a successful return is already a trusted match, no external check.
+      const input = addr('1001');
+      mockUrReverse.mockResolvedValue(['verified1.eth', RESOLVER, RESOLVER]);
+
+      const result = await resolveEnsReverse(input);
+
+      expect(result).toEqual({
+        success: true,
+        address: input.toLowerCase(),
+        name: 'verified1.eth',
+      });
+    });
+
+    test('UNVERIFIED when UR reverts with ReverseAddressMismatch', async () => {
+      const input = addr('1002');
+      const err = new Error('execution reverted: ReverseAddressMismatch');
+      err.data = '0xef9c03ce00000000000000000000000000000000';
+      mockUrReverse.mockRejectedValue(err);
+
+      const result = await resolveEnsReverse(input);
+
+      expect(result.success).toBe(false);
+      expect(result.reason).toBe('UNVERIFIED');
+      // No claimed-name field — keeps spoofed names out of the return shape
+      // entirely so no caller can accidentally surface them.
+      expect(result.claimedUnverifiedName).toBeUndefined();
+    });
+
+    test('NO_REVERSE when UR returns empty name', async () => {
+      const input = addr('1004');
+      mockUrReverse.mockResolvedValue(['', RESOLVER, RESOLVER]);
+
+      const result = await resolveEnsReverse(input);
+
+      expect(result.success).toBe(false);
+      expect(result.reason).toBe('NO_REVERSE');
+    });
+
+    test('NO_REVERSE when UR reverts with ResolverNotFound', async () => {
+      const input = addr('1005');
+      const err = new Error('execution reverted: ResolverNotFound');
+      err.data = '0x77209fe800000000';
+      mockUrReverse.mockRejectedValue(err);
+
+      const result = await resolveEnsReverse(input);
+
+      expect(result.success).toBe(false);
+      expect(result.reason).toBe('NO_REVERSE');
+    });
+
+    test('RESOLUTION_ERROR on generic UR revert', async () => {
+      const input = addr('1006');
+      mockUrReverse.mockRejectedValue(new Error('some other revert'));
+
+      const result = await resolveEnsReverse(input);
+
+      expect(result.success).toBe(false);
+      expect(result.reason).toBe('RESOLUTION_ERROR');
+    });
+
+    test('INVALID_ADDRESS for malformed input', async () => {
+      expect((await resolveEnsReverse('not-an-address')).reason).toBe('INVALID_ADDRESS');
+      expect((await resolveEnsReverse('')).reason).toBe('INVALID_ADDRESS');
+      expect((await resolveEnsReverse(null)).reason).toBe('INVALID_ADDRESS');
+      expect((await resolveEnsReverse('0x1234')).reason).toBe('INVALID_ADDRESS');
+      expect(mockUrReverse).not.toHaveBeenCalled();
+    });
+
+    test('retries on provider error then succeeds', async () => {
+      const input = addr('1007');
+      const providerError = new Error('server error');
+      providerError.code = 'SERVER_ERROR';
+
+      mockUrReverse
+        .mockRejectedValueOnce(providerError)
+        .mockResolvedValueOnce(['retry-reverse.eth', RESOLVER, RESOLVER]);
+
+      const result = await resolveEnsReverse(input);
+
+      expect(result.success).toBe(true);
+      expect(result.name).toBe('retry-reverse.eth');
+      expect(mockUrReverse).toHaveBeenCalledTimes(2);
+    });
+
+    test('caches successful verified results', async () => {
+      const input = addr('1008');
+      mockUrReverse.mockResolvedValue(['cached.eth', RESOLVER, RESOLVER]);
+
+      await resolveEnsReverse(input);
+      await resolveEnsReverse(input);
+
+      expect(mockUrReverse).toHaveBeenCalledTimes(1);
+    });
+
+    test('caches NO_REVERSE negative results too', async () => {
+      const input = addr('1009');
+      mockUrReverse.mockResolvedValue(['', RESOLVER, RESOLVER]);
+
+      await resolveEnsReverse(input);
+      await resolveEnsReverse(input);
+
+      expect(mockUrReverse).toHaveBeenCalledTimes(1);
+    });
+
+    test('normalizes input address to lowercase for caching', async () => {
+      const input = '0xAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAa10101010';
+      mockUrReverse.mockResolvedValue(['mixed.eth', RESOLVER, RESOLVER]);
+
+      await resolveEnsReverse(input);
+      await resolveEnsReverse(input.toLowerCase());
+
+      // Second call hits the cache keyed on lowercase form.
+      expect(mockUrReverse).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -360,6 +607,109 @@ describe('ens-resolver', () => {
       mockGetBlockNumber.mockRejectedValue(new Error('fail'));
       await testRpcUrl('http://localhost:8545');
       expect(mockDestroy).toHaveBeenCalled();
+    });
+  });
+
+  describe('universalResolverCall', () => {
+    test('encodes name, opts into CCIP-Read, returns raw resolvedData', async () => {
+      const rawResponse = actualEthers.AbiCoder.defaultAbiCoder().encode(
+        ['bytes'],
+        ['0xdeadbeef']
+      );
+      mockUrResolve.mockResolvedValue([rawResponse, FAKE_RESOLVER]);
+
+      const provider = new ethers.JsonRpcProvider('http://localhost:8545');
+      const callData = '0xbc1c58d1' + actualEthers.namehash('vitalik.eth').slice(2);
+      const result = await universalResolverCall(provider, 'vitalik.eth', callData);
+
+      // Returns raw ABI-encoded response — caller decodes per return type.
+      expect(result.resolvedData).toBe(rawResponse);
+      expect(result.resolverAddress).toBe(FAKE_RESOLVER);
+
+      expect(mockUrResolve).toHaveBeenCalledTimes(1);
+      const [encodedName, passedCallData, overrides] = mockUrResolve.mock.calls[0];
+      expect(encodedName).toBe(actualEthers.dnsEncode('vitalik.eth', 255));
+      expect(passedCallData).toBe(callData);
+      expect(overrides).toEqual({ enableCcipRead: true });
+    });
+
+    test('constructs Contract with UR address and minimal ABI', async () => {
+      mockUrResolve.mockResolvedValue(['0x', FAKE_RESOLVER]);
+      const provider = new ethers.JsonRpcProvider('http://localhost:8545');
+      await universalResolverCall(provider, 'vitalik.eth', '0xbc1c58d1');
+
+      expect(ethers.Contract).toHaveBeenCalledWith(
+        '0xeEeEEEeE14D718C2B47D9923Deab1335E144EeEe',
+        expect.arrayContaining([expect.stringContaining('function resolve')]),
+        provider
+      );
+    });
+
+    test('propagates UR reverts to the caller', async () => {
+      const err = new Error('execution reverted: ResolverNotFound');
+      mockUrResolve.mockRejectedValue(err);
+      const provider = new ethers.JsonRpcProvider('http://localhost:8545');
+      await expect(
+        universalResolverCall(provider, 'unregistered.eth', '0xbc1c58d1')
+      ).rejects.toThrow('ResolverNotFound');
+    });
+  });
+
+  describe('isResolverNotFoundError', () => {
+    test('matches ResolverNotFound in error message', () => {
+      expect(
+        isResolverNotFoundError(new Error('execution reverted: ResolverNotFound("foo.eth")'))
+      ).toBe(true);
+    });
+
+    test('matches ResolverNotContract in error message', () => {
+      expect(
+        isResolverNotFoundError(new Error('execution reverted: ResolverNotContract'))
+      ).toBe(true);
+    });
+
+    // ethers v6 surfaces revert selectors on err.data directly — this is
+    // the shape we see on real CALL_EXCEPTION errors from a live RPC.
+    test('matches ResolverNotFound selector on err.data (ethers v6)', () => {
+      const err = new Error('execution reverted (unknown custom error)');
+      err.data = '0x77209fe800000000000000000000000000000000000000000000000000000000';
+      expect(isResolverNotFoundError(err)).toBe(true);
+    });
+
+    test('matches ResolverNotContract selector on err.data', () => {
+      const err = new Error('execution reverted');
+      err.data = '0x1e9535f2000000000000000000';
+      expect(isResolverNotFoundError(err)).toBe(true);
+    });
+
+    // Some JSON-RPC wrappers nest the revert data one level deeper.
+    test('matches selector nested under err.info.error.data', () => {
+      const err = new Error('call exception');
+      err.info = { error: { data: '0x77209fe80000' } };
+      expect(isResolverNotFoundError(err)).toBe(true);
+    });
+
+    test('selector match is case-insensitive', () => {
+      const err = new Error('x');
+      err.data = '0x77209FE80000';
+      expect(isResolverNotFoundError(err)).toBe(true);
+    });
+
+    test('rejects unrelated errors', () => {
+      expect(isResolverNotFoundError(new Error('network timeout'))).toBe(false);
+      expect(isResolverNotFoundError(new Error('ECONNREFUSED'))).toBe(false);
+      const unrelated = new Error('x');
+      unrelated.data = '0xdeadbeef00000000';
+      expect(isResolverNotFoundError(unrelated)).toBe(false);
+      expect(isResolverNotFoundError(null)).toBe(false);
+      expect(isResolverNotFoundError(undefined)).toBe(false);
+      expect(isResolverNotFoundError({})).toBe(false);
+    });
+
+    test('does NOT match ReverseAddressMismatch (separate concept)', () => {
+      const err = new Error('execution reverted: ReverseAddressMismatch');
+      err.data = '0xef9c03ce00000000';
+      expect(isResolverNotFoundError(err)).toBe(false);
     });
   });
 });

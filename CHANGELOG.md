@@ -2,6 +2,23 @@
 
 All notable changes to Freedom will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- `ethereum:` URI scheme (EIP-681) routes to the wallet sidebar's Send screen with recipient, chain, and amount pre-filled. Lets any page offer a "Tip author" link like `<a href="ethereum:vitalik.eth@1?value=1e16">` — no wallet connection required. Native-asset sends only in this release; ERC-20 and other contract-call variants are rejected explicitly.
+- Wallet send review screen shows the recipient's primary ENS name alongside their address when a verified reverse record is set. The name only appears when the reverse record forward-verifies (its `addr` record points back to the same address), so a spoofed reverse can't mislead.
+
+### Changed
+
+- Wallet send: recipient field now accepts ENS names (`.eth`, `.box`, subdomains). The name is resolved to its `addr` record on mainnet when you press Continue, and the review screen shows both the name and the resolved address so you can verify before confirming.
+- Wallet send screen now honors the chain selected on the main wallet view instead of defaulting to the first chain with a balance.
+- ENS resolution now uses the Universal Resolver in a single RPC call for both content-hash and addr lookups. Cold-cache address-bar navigation to `.eth` / `.box` names is 3–4× fewer RPC round-trips (3 → 1 for direct names, 4 → 1 for wildcard-resolved names like `.box` via 3DNS). Same behavior and cache, just faster.
+
+### Fixed
+
+- dApp-connect wallet picker dropdown no longer shows through to the content below (had an undefined CSS variable in both themes).
+
 ## [0.6.2] - 2026-03-01
 
 ### Added

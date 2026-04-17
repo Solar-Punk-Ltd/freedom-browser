@@ -1,9 +1,41 @@
 const log = require('./logger');
 const { ipcMain } = require('electron');
 const { ethers } = require('ethers');
+const { ens_normalize } = require('@adraffy/ens-normalize');
 const IPC = require('../shared/ipc-channels');
 const { success, failure } = require('./ipc-contract');
 const { loadSettings } = require('./settings-store');
+
+// Canonical ENS Universal Resolver — a DAO-owned proxy that delegates to
+// the current implementation, so future UR upgrades don't require a code
+// change here. Docs: https://docs.ens.domains/resolvers/universal/
+// One call replaces the 3-step "registry lookup → supportsWildcard →
+// contenthash" flow ethers would otherwise make, and handles CCIP-Read
+// transparently for offchain resolvers (.box via 3DNS).
+const UNIVERSAL_RESOLVER_ADDRESS = '0xeEeEEEeE14D718C2B47D9923Deab1335E144EeEe';
+const UR_ABI = [
+  'function resolve(bytes name, bytes data) view returns (bytes result, address resolver)',
+  'function reverse(bytes lookupAddress, uint256 coinType) view returns (string primary, address resolver, address reverseResolver)',
+];
+
+// bytes4(keccak256("contenthash(bytes32)"))
+const CONTENTHASH_SELECTOR = '0xbc1c58d1';
+// bytes4(keccak256("addr(bytes32)"))
+const ADDR_SELECTOR = '0x3b3b57de';
+
+// SLIP-0044 coin type for Ethereum mainnet, used by UR.reverse.
+const ETH_COIN_TYPE = 60n;
+
+// ENS contenthash byte patterns (EIP-1577). We preserve the CIDv0 base58
+// output ("QmFoo…") for IPFS/IPNS to stay byte-compatible with the
+// previous ethers-based implementation — users' bookmarks and history
+// entries keyed on the old URI form keep matching.
+//   0xe3 01 70             — ipfs-ns, cidv1, dag-pb
+//   0xe5 01 72             — ipns-ns, cidv1, libp2p-key
+//   0xe4 01 01 fa 01 1b 20 — swarm-ns + manifest codec, 32-byte keccak
+const IPFS_CONTENTHASH_RE =
+  /^0x(?<codecPrefix>e3010170|e5010172)(?<multihash>(?<mhCode>[0-9a-f]{2})(?<mhLen>[0-9a-f]{2})(?<digest>[0-9a-f]*))$/;
+const SWARM_CONTENTHASH_RE = /^0xe40101fa011b20(?<swarmHash>[0-9a-f]{64})$/;
 
 // Public RPC providers as fallbacks
 const PUBLIC_RPC_PROVIDERS = [
@@ -35,13 +67,17 @@ function getRpcProviders() {
   return PUBLIC_RPC_PROVIDERS;
 }
 
-// Cache for working provider
 let cachedProvider = null;
 let cachedProviderUrl = null;
 
-// Cache for ENS resolution results (name -> { result, timestamp })
-const ENS_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
+const ENS_CACHE_TTL_MS = 15 * 60 * 1000;
 const ensResultCache = new Map();
+
+// Independent from ensResultCache so content and addr lookups don't evict each other.
+const ensAddressCache = new Map();
+
+// Address (lowercased 0x) → { result, timestamp } for reverse lookups.
+const ensReverseCache = new Map();
 
 // Get a working provider, trying each in sequence with fallback
 async function getWorkingProvider() {
@@ -138,169 +174,361 @@ function isProviderError(err) {
 // Maximum retries for provider errors during resolution
 const MAX_RESOLUTION_RETRIES = 3;
 
-async function resolveEnsContent(name) {
-  const trimmed = (name || '').trim();
-  if (!trimmed) {
-    throw new Error('ENS name is empty');
-  }
+// Canonical UR custom errors we classify. ethers v6 surfaces the 4-byte
+// selector via err.data on CALL_EXCEPTION; some wrappers (JSON-RPC
+// proxies) expose it under err.info.error.data instead — check both.
+// Selectors are bytes4(keccak256(signature)).
+//
+// https://docs.ens.domains/resolvers/universal/
+const UR_NOT_FOUND_SELECTORS = new Set([
+  '0x77209fe8', // ResolverNotFound(bytes)
+  '0x1e9535f2', // ResolverNotContract(bytes,address)
+]);
+const REVERSE_MISMATCH_SELECTOR = '0xef9c03ce'; // ReverseAddressMismatch(string,bytes)
 
-  // Basic normalization; full ENS nameprep is more complex but this is fine
-  // for normal .eth and .box names.
-  const normalized = trimmed.toLowerCase();
-  log.info(`[ens] Resolving: ${normalized}`);
-
-  // Check cache first
-  const cached = ensResultCache.get(normalized);
-  if (cached && Date.now() - cached.timestamp < ENS_CACHE_TTL_MS) {
-    log.info(`[ens] Cache hit for ${normalized} → ${cached.result.uri || cached.result.reason}`);
-    return cached.result;
-  }
-
-  // Retry loop for provider errors
-  let lastError;
-  for (let attempt = 1; attempt <= MAX_RESOLUTION_RETRIES; attempt++) {
-    try {
-      return await doResolveEnsContent(normalized, attempt);
-    } catch (err) {
-      lastError = err;
-      if (isProviderError(err) && attempt < MAX_RESOLUTION_RETRIES) {
-        log.warn(
-          `[ens] Provider error on attempt ${attempt}/${MAX_RESOLUTION_RETRIES}: ${err.message}`
-        );
-        invalidateCachedProvider();
-        // Continue to next attempt
-      } else {
-        // Not a provider error or out of retries - rethrow
-        throw err;
-      }
-    }
-  }
-
-  // Should not reach here, but just in case
-  throw lastError;
+function urErrorSelector(err) {
+  const data = err?.data || err?.info?.error?.data || '';
+  if (typeof data !== 'string' || data.length < 10) return null;
+  return data.slice(0, 10).toLowerCase();
 }
 
-async function doResolveEnsContent(normalized, attempt) {
+function isResolverNotFoundError(err) {
+  const msg = err?.message || '';
+  if (/ResolverNotFound|ResolverNotContract/i.test(msg)) return true;
+  const sel = urErrorSelector(err);
+  return sel !== null && UR_NOT_FOUND_SELECTORS.has(sel);
+}
+
+// UR.reverse reverts with this when the claimed primary name doesn't
+// forward-resolve back to the input address. Semantically: spoofed or
+// stale reverse record.
+function isReverseAddressMismatchError(err) {
+  const msg = err?.message || '';
+  if (/ReverseAddressMismatch/i.test(msg)) return true;
+  return urErrorSelector(err) === REVERSE_MISMATCH_SELECTOR;
+}
+
+// Call the Universal Resolver's resolve(name, data). `callData` is the raw
+// ABI-encoded call the resolver would have received directly (selector +
+// args). Returns { bytes, resolverAddress } where `bytes` is the decoded
+// inner return value of that call.
+//
+// CCIP-Read is opted into per-call here because ethers v6 doesn't enable it
+// by default — needed for .box domains resolved via 3DNS.
+// Call UR.resolve for an arbitrary resolver function. Returns the raw
+// ABI-encoded response — the caller must decode per their function's
+// return type (e.g. decode(['bytes'], ...) for contenthash, or
+// decode(['address'], ...) for addr). Returning pre-decoded bytes here
+// would silently work for dynamic returns and overflow for static ones.
+async function universalResolverCall(provider, name, callData) {
+  const ur = new ethers.Contract(UNIVERSAL_RESOLVER_ADDRESS, UR_ABI, provider);
+  const encodedName = ethers.dnsEncode(name, 255);
+  const [resolvedData, resolverAddress] = await ur.resolve(encodedName, callData, {
+    enableCcipRead: true,
+  });
+  return { resolvedData, resolverAddress };
+}
+
+async function resolveEnsContent(name) {
+  return resolveWithCache(name, ensResultCache, doResolveEnsContent, 'content');
+}
+
+async function doResolveEnsContent(normalized) {
   const provider = await getWorkingProvider();
+  const node = ethers.namehash(normalized);
+  const callData = CONTENTHASH_SELECTOR + node.slice(2);
 
-  // Use ethers.js built-in resolver which handles CCIP-Read (EIP-3668) automatically.
-  // This is required for .box domains which use offchain resolution via 3dns.xyz.
-  log.info(
-    `[ens] Getting resolver for: ${normalized}${attempt > 1 ? ` (attempt ${attempt})` : ''}`
-  );
-  const resolver = await provider.getResolver(normalized);
-
-  if (!resolver) {
-    log.info(`[ens] No resolver found for: ${normalized}`);
-    const result = {
-      type: 'not_found',
-      reason: 'NO_RESOLVER',
-      name: normalized,
-    };
-    ensResultCache.set(normalized, { result, timestamp: Date.now() });
-    return result;
-  }
-
-  log.info(`[ens] Getting content hash for: ${normalized}`);
-  let contentHash;
+  let urResult;
   try {
-    // getContentHash() handles CCIP-Read and returns formatted URI like "ipfs://Qm..." or "bzz://..."
-    contentHash = await resolver.getContentHash();
+    urResult = await universalResolverCall(provider, normalized, callData);
   } catch (err) {
-    // Re-throw provider errors so they trigger retry logic
-    if (isProviderError(err)) {
-      throw err;
+    if (isProviderError(err)) throw err;
+    if (isResolverNotFoundError(err)) {
+      return cacheContentResult(normalized, {
+        type: 'not_found',
+        reason: 'NO_RESOLVER',
+        name: normalized,
+      });
     }
-    // CCIP-Read failures or missing contenthash
-    log.info(`[ens] Failed to get content hash for ${normalized}: ${err.message}`);
-    const result = {
+    log.info(`[ens] UR resolve failed for ${normalized}: ${err.message}`);
+    return cacheContentResult(normalized, {
       type: 'not_found',
       reason: 'NO_CONTENTHASH',
       name: normalized,
       error: err.message,
-    };
-    ensResultCache.set(normalized, { result, timestamp: Date.now() });
-    return result;
+    });
   }
 
-  if (!contentHash) {
-    log.info(`[ens] Empty content hash for: ${normalized}`);
-    const result = {
+  // contenthash() returns dynamic `bytes` — ABI-unwrap to get the raw
+  // multicodec-prefixed content-hash bytes.
+  let innerBytes;
+  try {
+    [innerBytes] = ethers.AbiCoder.defaultAbiCoder().decode(['bytes'], urResult.resolvedData);
+  } catch (err) {
+    log.warn(`[ens] Failed to decode contenthash bytes for ${normalized}: ${err.message}`);
+    return cacheContentResult(normalized, {
+      type: 'unsupported',
+      reason: 'UNSUPPORTED_CONTENTHASH_FORMAT',
+      name: normalized,
+      contentHash: urResult.resolvedData,
+    });
+  }
+
+  if (!innerBytes || innerBytes === '0x') {
+    return cacheContentResult(normalized, {
       type: 'not_found',
       reason: 'EMPTY_CONTENTHASH',
       name: normalized,
-    };
-    ensResultCache.set(normalized, { result, timestamp: Date.now() });
-    return result;
+    });
   }
 
-  // ethers.js getContentHash() returns formatted URIs like:
-  // - "ipfs://QmHash" or "ipfs://bafyHash"
-  // - "ipns://name"
-  // - "bzz://hash"
-  // Parse the protocol and decoded value from the URI
-  log.info(`[ens] Raw content hash for ${normalized}: ${contentHash}`);
-  let result;
-  const match = contentHash.match(/^([a-z]+):\/\/(.+)$/i);
-
-  if (!match) {
-    log.warn(`[ens] Unsupported content hash format for ${normalized}: ${contentHash}`);
-    result = {
+  const parsed = parseContentHashBytes(innerBytes);
+  if (!parsed) {
+    log.warn(`[ens] UNSUPPORTED_CONTENTHASH_FORMAT for ${normalized}: ${innerBytes}`);
+    return cacheContentResult(normalized, {
       type: 'unsupported',
-      reason: `UNSUPPORTED_CONTENTHASH_FORMAT`,
+      reason: 'UNSUPPORTED_CONTENTHASH_FORMAT',
       name: normalized,
-      contentHash,
-    };
-    ensResultCache.set(normalized, { result, timestamp: Date.now() });
-    return result;
+      contentHash: innerBytes,
+    });
   }
 
-  const [, protocol, decoded] = match;
-  const protocolLower = protocol.toLowerCase();
+  return cacheContentResult(normalized, { type: 'ok', name: normalized, ...parsed });
+}
 
-  if (protocolLower === 'bzz' || protocolLower === 'swarm') {
-    result = {
-      type: 'ok',
-      name: normalized,
+// Decode raw ENS contenthash bytes into our result shape. Mirrors ethers'
+// internal decoder bit-for-bit to preserve CIDv0 base58 output for IPFS
+// — a content-hash library would normalize everything to CIDv1, breaking
+// history/bookmark matching on names users already visited.
+// Returns null for any format we don't support.
+function parseContentHashBytes(hex0x) {
+  const ipfs = hex0x.match(IPFS_CONTENTHASH_RE);
+  if (ipfs) {
+    const { codecPrefix, multihash, mhLen, digest } = ipfs.groups;
+    if (digest.length === parseInt(mhLen, 16) * 2) {
+      const scheme = codecPrefix === 'e3010170' ? 'ipfs' : 'ipns';
+      const decoded = ethers.encodeBase58('0x' + multihash);
+      return {
+        codec: `${scheme}-ns`,
+        protocol: scheme,
+        uri: `${scheme}://${decoded}`,
+        decoded,
+      };
+    }
+  }
+  const swarm = hex0x.match(SWARM_CONTENTHASH_RE);
+  if (swarm) {
+    const hash = swarm.groups.swarmHash;
+    return {
       codec: 'swarm-ns',
       protocol: 'bzz',
-      uri: `bzz://${decoded}`,
-      decoded,
+      uri: `bzz://${hash}`,
+      decoded: hash,
     };
-  } else if (protocolLower === 'ipfs') {
-    result = {
-      type: 'ok',
-      name: normalized,
-      codec: 'ipfs-ns',
-      protocol: 'ipfs',
-      uri: `ipfs://${decoded}`,
-      decoded,
-    };
-  } else if (protocolLower === 'ipns') {
-    result = {
-      type: 'ok',
-      name: normalized,
-      codec: 'ipns-ns',
-      protocol: 'ipns',
-      uri: `ipns://${decoded}`,
-      decoded,
-    };
-  } else {
-    log.warn(`[ens] Unsupported protocol for ${normalized}: ${protocol}`);
-    result = {
-      type: 'unsupported',
-      reason: `UNSUPPORTED_PROTOCOL (${protocol})`,
-      name: normalized,
-      protocol,
-      decoded,
-    };
+  }
+  return null;
+}
+
+function cacheContentResult(normalized, result) {
+  return cacheAndLog(ensResultCache, normalized, result, result.uri);
+}
+
+// Resolve an ENS name's primary ETH address (the `addr` record).
+// Single UR call (vs ethers' registry → addr 2-step flow); CCIP-Read
+// handled transparently via OffchainLookup.
+async function resolveEnsAddress(name) {
+  return resolveWithCache(name, ensAddressCache, doResolveEnsAddress, 'addr');
+}
+
+// Shared validation + cache + retry wrapper for the content-hash and
+// addr lookup paths.
+//
+// Normalization goes through @adraffy/ens-normalize (UTS-46 / ENSIP-15),
+// not a bare .toLowerCase(). That's correct for unicode ENS names
+// (emoji labels, non-ASCII domains) whose namehash depends on canonical
+// NFC form. `ens_normalize` is a no-op beyond lowercasing for pure-ASCII
+// names like "Vitalik.ETH", so callers that pass 0x addresses (reverse
+// lookup) are unaffected. Invalid labels throw — which propagates to
+// the IPC handler and surfaces as a RESOLUTION_ERROR to the renderer.
+async function resolveWithCache(name, cache, doResolve, label) {
+  const trimmed = (name || '').trim();
+  if (!trimmed) {
+    throw new Error('ENS name is empty');
+  }
+  const normalized = ens_normalize(trimmed);
+
+  const cached = cache.get(normalized);
+  if (cached && Date.now() - cached.timestamp < ENS_CACHE_TTL_MS) {
+    log.info(`[ens] ${label} cache hit for ${normalized}`);
+    return cached.result;
   }
 
-  if (result.type === 'ok') {
-    log.info(`[ens] Resolved: ${normalized} → ${result.uri}`);
+  let lastError;
+  for (let attempt = 1; attempt <= MAX_RESOLUTION_RETRIES; attempt++) {
+    try {
+      return await doResolve(normalized);
+    } catch (err) {
+      lastError = err;
+      if (isProviderError(err) && attempt < MAX_RESOLUTION_RETRIES) {
+        log.warn(
+          `[ens] ${label} provider error on attempt ${attempt}/${MAX_RESOLUTION_RETRIES}: ${err.message}`
+        );
+        invalidateCachedProvider();
+        continue;
+      }
+      throw err;
+    }
   }
-  ensResultCache.set(normalized, { result, timestamp: Date.now() });
+  throw lastError;
+}
+
+async function doResolveEnsAddress(normalized) {
+  const provider = await getWorkingProvider();
+  const node = ethers.namehash(normalized);
+  const callData = ADDR_SELECTOR + node.slice(2);
+
+  let urResult;
+  try {
+    urResult = await universalResolverCall(provider, normalized, callData);
+  } catch (err) {
+    if (isProviderError(err)) throw err;
+    if (isResolverNotFoundError(err)) {
+      return cacheAddressResult(normalized, noAddressResult(normalized));
+    }
+    log.info(`[ens] UR addr resolve failed for ${normalized}: ${err.message}`);
+    return cacheAddressResult(normalized, {
+      success: false,
+      name: normalized,
+      reason: 'RESOLUTION_ERROR',
+      error: err.message,
+    });
+  }
+
+  // addr() returns `address` — the UR's resolvedData is the raw 32-byte
+  // ABI-encoded address, NOT bytes-wrapped. Decode directly.
+  if (!urResult.resolvedData || urResult.resolvedData === '0x') {
+    return cacheAddressResult(normalized, noAddressResult(normalized));
+  }
+
+  let address;
+  try {
+    [address] = ethers.AbiCoder.defaultAbiCoder().decode(['address'], urResult.resolvedData);
+  } catch (err) {
+    log.warn(`[ens] Failed to decode addr bytes for ${normalized}: ${err.message}`);
+    return cacheAddressResult(normalized, {
+      success: false,
+      name: normalized,
+      reason: 'RESOLUTION_ERROR',
+      error: err.message,
+    });
+  }
+
+  if (address === ethers.ZeroAddress) {
+    return cacheAddressResult(normalized, noAddressResult(normalized));
+  }
+
+  return cacheAddressResult(normalized, {
+    success: true,
+    name: normalized,
+    address,
+  });
+}
+
+function noAddressResult(normalized) {
+  return {
+    success: false,
+    name: normalized,
+    reason: 'NO_ADDRESS',
+    error: `No address record set for ${normalized}`,
+  };
+}
+
+function cacheAddressResult(normalized, result) {
+  return cacheAndLog(ensAddressCache, normalized, result, result.address);
+}
+
+// Shared cache-set + log-and-return for both lookup paths. `okValue` is
+// the success-case display (uri for content, address for addr); passing
+// a truthy value logs "Resolved → <value>", otherwise logs the reason.
+function cacheAndLog(cache, normalized, result, okValue) {
+  cache.set(normalized, { result, timestamp: Date.now() });
+  if (okValue) {
+    log.info(`[ens] Resolved: ${normalized} → ${okValue}`);
+  } else {
+    log.info(`[ens] ${result.reason} for ${normalized}`);
+  }
   return result;
+}
+
+// Resolve an address to its ENS primary name. The UR verifies the reverse
+// record forward-resolves back to the input address internally and reverts
+// with ReverseAddressMismatch if not — so a successful return is already
+// a trusted name. Spoofed/stale reverses surface as UNVERIFIED.
+async function resolveEnsReverse(address) {
+  if (typeof address !== 'string' || !/^0x[a-fA-F0-9]{40}$/.test(address)) {
+    return {
+      success: false,
+      address,
+      reason: 'INVALID_ADDRESS',
+      error: `Invalid address: ${address}`,
+    };
+  }
+  return resolveWithCache(address, ensReverseCache, doResolveEnsReverse, 'reverse');
+}
+
+async function doResolveEnsReverse(normalizedAddress) {
+  const provider = await getWorkingProvider();
+  const ur = new ethers.Contract(UNIVERSAL_RESOLVER_ADDRESS, UR_ABI, provider);
+  const addrBytes = ethers.getBytes(normalizedAddress);
+
+  let claimedName;
+  try {
+    const [name] = await ur.reverse(addrBytes, ETH_COIN_TYPE, { enableCcipRead: true });
+    claimedName = name;
+  } catch (err) {
+    if (isProviderError(err)) throw err;
+    if (isResolverNotFoundError(err)) {
+      return cacheReverseResult(normalizedAddress, noReverseResult(normalizedAddress));
+    }
+    if (isReverseAddressMismatchError(err)) {
+      return cacheReverseResult(normalizedAddress, {
+        success: false,
+        address: normalizedAddress,
+        reason: 'UNVERIFIED',
+        error: `Reverse record for ${normalizedAddress} does not forward-verify`,
+      });
+    }
+    log.info(`[ens] UR reverse failed for ${normalizedAddress}: ${err.message}`);
+    return cacheReverseResult(normalizedAddress, {
+      success: false,
+      address: normalizedAddress,
+      reason: 'RESOLUTION_ERROR',
+      error: err.message,
+    });
+  }
+
+  if (!claimedName) {
+    return cacheReverseResult(normalizedAddress, noReverseResult(normalizedAddress));
+  }
+
+  return cacheReverseResult(normalizedAddress, {
+    success: true,
+    address: normalizedAddress,
+    name: claimedName,
+  });
+}
+
+function noReverseResult(normalizedAddress) {
+  return {
+    success: false,
+    address: normalizedAddress,
+    reason: 'NO_REVERSE',
+    error: `No primary ENS name set for ${normalizedAddress}`,
+  };
+}
+
+function cacheReverseResult(normalizedAddress, result) {
+  return cacheAndLog(ensReverseCache, normalizedAddress, result, result.name);
 }
 
 // Test an RPC URL by connecting and fetching the block number.
@@ -362,11 +590,45 @@ function registerEnsIpc() {
   ipcMain.handle(IPC.ENS_TEST_RPC, async (_event, payload = {}) => {
     return testRpcUrl(payload.url);
   });
+
+  ipcMain.handle(IPC.ENS_RESOLVE_ADDRESS, async (_event, payload = {}) => {
+    const { name } = payload;
+    try {
+      return await resolveEnsAddress(name);
+    } catch (err) {
+      log.error('[ens] address resolution error', err);
+      return {
+        success: false,
+        name: (name || '').trim().toLowerCase(),
+        reason: 'RESOLUTION_ERROR',
+        error: err.message,
+      };
+    }
+  });
+
+  ipcMain.handle(IPC.ENS_RESOLVE_REVERSE, async (_event, payload = {}) => {
+    const { address } = payload;
+    try {
+      return await resolveEnsReverse(address);
+    } catch (err) {
+      log.error('[ens] reverse resolution error', err);
+      return {
+        success: false,
+        address: typeof address === 'string' ? address.toLowerCase() : null,
+        reason: 'RESOLUTION_ERROR',
+        error: err.message,
+      };
+    }
+  });
 }
 
 module.exports = {
   registerEnsIpc,
   resolveEnsContent,
+  resolveEnsAddress,
+  resolveEnsReverse,
   testRpcUrl,
   invalidateCachedProvider,
+  universalResolverCall,
+  isResolverNotFoundError,
 };

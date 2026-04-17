@@ -64,6 +64,8 @@ let sendRetryBtn;
 let sendTxState = {
   selectedToken: null,
   recipient: '',
+  // Set only when `recipient` was resolved from ENS; review view shows both.
+  recipientName: null,
   amount: '',
   gasLimit: null,
   maxFeePerGas: null,
@@ -131,7 +133,8 @@ export function initSend() {
 function setupSendScreen() {
   const sendBtn = document.getElementById('wallet-send-btn');
   if (sendBtn) {
-    sendBtn.addEventListener('click', openSend);
+    // Arrow wrapper so the click Event isn't passed as `options`.
+    sendBtn.addEventListener('click', () => openSend());
   }
 
   if (sendBackBtn) {
@@ -156,7 +159,12 @@ function setupSendScreen() {
   });
 
   if (sendRecipientInput) {
-    sendRecipientInput.addEventListener('input', () => clearSendError('recipient'));
+    sendRecipientInput.addEventListener('input', () => {
+      clearSendError('recipient');
+      // Edits invalidate any previously-resolved ENS address.
+      hideResolvedAddress();
+      sendTxState.recipientName = null;
+    });
   }
 
   if (sendAmountInput) {
@@ -250,6 +258,7 @@ function resetSendState() {
   sendTxState = {
     selectedToken: null,
     recipient: '',
+    recipientName: null,
     amount: '',
     gasLimit: null,
     maxFeePerGas: null,
@@ -262,6 +271,8 @@ function resetSendState() {
   if (sendRecipientInput) sendRecipientInput.value = '';
   if (sendAmountInput) sendAmountInput.value = '';
   if (sendPasswordInput) sendPasswordInput.value = '';
+
+  if (sendResolvedAddress) sendResolvedAddress.textContent = '';
 
   closeSendChainDropdown();
   closeSendAssetDropdown();
@@ -359,14 +370,23 @@ function closeSendChainDropdown() {
 }
 
 function populateSendChainSelector() {
-  const chainsWithBalance = getChainsWithBalance();
+  // Carry over the chain the user has active on the main wallet view, even
+  // if it has no balance yet — their intent beats "pick the top chain with
+  // funds". selectedChainId is null only in the "All chains" view.
+  const selected = walletState.selectedChainId;
+  if (selected !== null && walletState.registeredChains[selected]) {
+    selectSendChain(selected);
+    return;
+  }
 
+  const chainsWithBalance = getChainsWithBalance();
   if (chainsWithBalance.length > 0) {
     selectSendChain(chainsWithBalance[0].chainId);
-  } else {
-    if (sendChainName) sendChainName.textContent = 'No funds';
-    if (sendAssetName) sendAssetName.textContent = 'No assets';
+    return;
   }
+
+  if (sendChainName) sendChainName.textContent = 'No funds';
+  if (sendAssetName) sendAssetName.textContent = 'No assets';
 }
 
 function applySendOpenOptions(options = {}) {
@@ -386,6 +406,11 @@ function applySendOpenOptions(options = {}) {
   if (options.recipient && sendRecipientInput) {
     sendRecipientInput.value = options.recipient;
     sendTxState.recipient = options.recipient;
+  }
+
+  if (options.amount && sendAmountInput) {
+    sendAmountInput.value = options.amount;
+    sendTxState.amount = options.amount;
   }
 }
 
@@ -644,7 +669,7 @@ async function handleSendMax() {
   }
 }
 
-function formatWeiToDecimal(wei, decimals = 18) {
+export function formatWeiToDecimal(wei, decimals = 18) {
   if (wei === 0n) return '0';
 
   const weiStr = wei.toString().padStart(decimals + 1, '0');
@@ -660,29 +685,34 @@ function formatWeiToDecimal(wei, decimals = 18) {
   return `${integerPart}.${trimmed}`;
 }
 
-function validateRecipient() {
+// ENS-like only matches .eth/.box — mainnet resolution decides whether the
+// name actually has an addr record.
+function classifyRecipient() {
   const recipient = sendRecipientInput?.value?.trim() || '';
 
   if (!recipient) {
     showSendError('recipient', 'Recipient address is required');
-    return false;
+    return { ok: false };
   }
 
-  if (!isValidEthereumAddress(recipient)) {
-    if (recipient.endsWith('.eth')) {
-      showSendError('recipient', 'ENS names not supported yet. Please enter an address.');
-      return false;
-    }
-    showSendError('recipient', 'Invalid Ethereum address');
-    return false;
+  if (isValidEthereumAddress(recipient)) {
+    return { ok: true, type: 'address', value: recipient };
   }
 
-  sendTxState.recipient = recipient;
-  return true;
+  if (isEnsLikeName(recipient)) {
+    return { ok: true, type: 'ens', value: recipient.toLowerCase() };
+  }
+
+  showSendError('recipient', 'Invalid Ethereum address or ENS name');
+  return { ok: false };
 }
 
 function isValidEthereumAddress(address) {
   return /^0x[a-fA-F0-9]{40}$/.test(address);
+}
+
+function isEnsLikeName(value) {
+  return /^[a-z0-9-]+(\.[a-z0-9-]+)*\.(eth|box)$/i.test(value);
 }
 
 function validateAmount() {
@@ -754,7 +784,8 @@ function clearSendError(field) {
 }
 
 async function handleSendContinue() {
-  if (!validateRecipient() || !validateAmount()) {
+  const recipientClass = classifyRecipient();
+  if (!recipientClass.ok || !validateAmount()) {
     return;
   }
 
@@ -764,7 +795,30 @@ async function handleSendContinue() {
   }
 
   try {
-    await estimateTransactionGas();
+    let reverseLookup = Promise.resolve(null);
+    if (recipientClass.type === 'ens') {
+      if (sendContinueBtn) sendContinueBtn.textContent = 'Resolving ENS…';
+      const resolved = await resolveRecipientEns(recipientClass.value);
+      if (!resolved) return; // error already surfaced on the recipient field
+      sendTxState.recipient = resolved.address;
+      sendTxState.recipientName = resolved.name;
+      showResolvedAddress(resolved.address);
+    } else {
+      sendTxState.recipient = recipientClass.value;
+      hideResolvedAddress();
+      // Best-effort reverse lookup so the review screen can show the
+      // recipient's primary ENS name alongside the address when one is
+      // verifiably set. Fire in parallel with gas estimation so it
+      // doesn't add latency to the Continue → Review transition; a
+      // failure here doesn't block the send.
+      reverseLookup = lookupPrimaryNameForAddress(recipientClass.value);
+    }
+
+    if (sendContinueBtn) sendContinueBtn.textContent = 'Loading...';
+    const [, reverseName] = await Promise.all([estimateTransactionGas(), reverseLookup]);
+    if (reverseName && !sendTxState.recipientName) {
+      sendTxState.recipientName = reverseName;
+    }
     populateSendReview();
     await configureSendUnlockUI();
     showSendReviewView();
@@ -777,6 +831,59 @@ async function handleSendContinue() {
       sendContinueBtn.textContent = 'Continue';
     }
   }
+}
+
+// Ask main for the primary ENS name set for an address and return it
+// only if it forward-verifies. Never throws — returns null on any
+// failure or unavailability so the send flow isn't blocked.
+async function lookupPrimaryNameForAddress(address) {
+  const api = window.electronAPI;
+  if (!api?.resolveEnsReverse) return null;
+  try {
+    const result = await api.resolveEnsReverse(address);
+    return result?.success && result.name ? result.name : null;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveRecipientEns(name) {
+  const api = window.electronAPI;
+  if (!api?.resolveEnsAddress) {
+    showSendError('recipient', 'ENS resolution unavailable');
+    return null;
+  }
+
+  let result;
+  try {
+    result = await api.resolveEnsAddress(name);
+  } catch (err) {
+    showSendError('recipient', err.message || 'ENS resolution failed');
+    return null;
+  }
+
+  if (!result?.success || !result.address) {
+    const message =
+      result?.reason === 'NO_ADDRESS'
+        ? `No address set for ${name}`
+        : result?.error || 'ENS resolution failed';
+    showSendError('recipient', message);
+    return null;
+  }
+
+  return { name: result.name || name, address: result.address };
+}
+
+function showResolvedAddress(address) {
+  if (!sendResolvedAddress) return;
+  sendResolvedAddress.textContent = address;
+  sendResolvedAddress.classList.remove('hidden');
+}
+
+function hideResolvedAddress() {
+  if (!sendResolvedAddress) return;
+  sendResolvedAddress.textContent = '';
+  sendResolvedAddress.classList.add('hidden');
 }
 
 async function estimateTransactionGas() {
@@ -840,7 +947,11 @@ function populateSendReview() {
   const chain = walletState.registeredChains[sendTxState.chainId];
 
   if (sendReviewTo) {
-    sendReviewTo.textContent = sendTxState.recipient;
+    if (sendTxState.recipientName) {
+      sendReviewTo.textContent = `${sendTxState.recipientName} (${sendTxState.recipient})`;
+    } else {
+      sendReviewTo.textContent = sendTxState.recipient;
+    }
   }
 
   if (sendReviewAmount) {
