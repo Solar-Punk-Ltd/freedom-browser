@@ -1,3 +1,5 @@
+const crypto = require('crypto');
+const fs = require('fs');
 const log = require('./logger');
 const { ipcMain, app, dialog, clipboard, nativeImage } = require('electron');
 const { URL } = require('url');
@@ -13,6 +15,37 @@ const webviewPreloadPath = path.join(__dirname, 'webview-preload.js');
 
 // Canonical internal-pages list (shared with preloads via sync IPC)
 const internalPages = require('../shared/internal-pages.json');
+
+// Ethereum provider injection source, read once and shared with webview preloads
+// over sync IPC. The preload is sandboxed and cannot `require('fs')` itself.
+const ethereumInjectSource = fs.readFileSync(
+  path.join(__dirname, 'webview-preload-ethereum-inject.js'),
+  'utf-8'
+);
+
+// EIP-6963 ProviderInfo static fields. Icon is a 96×96 PNG base64-encoded
+// (spec recommends square, 96×96 minimum, and requires an RFC-2397 data URI).
+// Name and rdns pulled from package.json so a rebrand updates in one place.
+const ethereumProviderIconPath = app.isPackaged
+  ? path.join(process.resourcesPath, 'assets', 'icon-6963.png')
+  : path.join(__dirname, '..', '..', 'assets', 'icon-6963.png');
+const pkg = require('../../package.json');
+// Read the icon defensively: a missing/corrupt file must not block main-process
+// startup. Fall back to an empty icon and let the 6963 announcement still fire.
+let ethereumProviderIconDataUri = '';
+try {
+  ethereumProviderIconDataUri =
+    'data:image/png;base64,' + fs.readFileSync(ethereumProviderIconPath, 'base64');
+} catch (err) {
+  log.error('[eip6963] Failed to load provider icon:', err.message);
+}
+const ethereumProviderInfoStatic = Object.freeze({
+  name: pkg.build.productName,
+  icon: ethereumProviderIconDataUri,
+  // rdns is EIP-6963's "reverse-DNS" identifier; build.appId (baby.freedom.browser)
+  // is already valid reverse-DNS of freedom.baby, so we reuse it.
+  rdns: pkg.build.appId,
+});
 
 const isAllowedBaseUrl = (value) => {
   if (!value) return false;
@@ -200,6 +233,19 @@ function registerBaseIpcHandlers(callbacks = {}) {
   // Sync handler: preloads use sendSync to get internal pages at load time
   ipcMain.on(IPC.GET_INTERNAL_PAGES, (event) => {
     event.returnValue = internalPages;
+  });
+
+  ipcMain.on(IPC.GET_ETHEREUM_INJECT_SOURCE, (event) => {
+    // One UUID per webview-preload load (i.e. per page session), stable
+    // across eip6963:requestProvider re-announcements within that session.
+    // Each new tab / reload is a fresh session and gets a fresh UUID.
+    // Escape '<' as \u003c so a future field value containing '</script>'
+    // can't break out of the injected <script> tag (defense in depth;
+    // today's fields all come from package.json).
+    const info = { ...ethereumProviderInfoStatic, uuid: crypto.randomUUID() };
+    const infoJson = JSON.stringify(info).replace(/</g, '\\u003c');
+    const preamble = `window.__FREEDOM_PROVIDER_CONFIG__ = ${infoJson};\n`;
+    event.returnValue = preamble + ethereumInjectSource;
   });
 
   ipcMain.handle(IPC.OPEN_URL_IN_NEW_TAB, (event, url) => {

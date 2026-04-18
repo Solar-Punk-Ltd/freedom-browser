@@ -31,6 +31,7 @@ function loadWebviewPreloadModule(options = {}) {
   const ipcRenderer = createIpcRendererMock({
     syncResponses: {
       [IPC.GET_INTERNAL_PAGES]: internalPages,
+      [IPC.GET_ETHEREUM_INJECT_SOURCE]: '/* ethereum inject source stub */',
     },
     invokeResponses: {
       [IPC.HISTORY_GET]: [{ url: 'https://example.com' }],

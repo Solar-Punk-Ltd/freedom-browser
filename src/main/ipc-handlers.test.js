@@ -1,3 +1,4 @@
+const fs = require('fs');
 const path = require('path');
 const internalPages = require('../shared/internal-pages.json');
 const IPC = require('../shared/ipc-channels');
@@ -237,6 +238,27 @@ describe('ipc-handlers', () => {
     const internalPagesEvent = {};
     ctx.ipcMain.emit(IPC.GET_INTERNAL_PAGES, internalPagesEvent);
     expect(internalPagesEvent.returnValue).toEqual(internalPages);
+
+    const injectEvent = {};
+    ctx.ipcMain.emit(IPC.GET_ETHEREUM_INJECT_SOURCE, injectEvent);
+    const expectedSource = fs.readFileSync(
+      path.join(__dirname, 'webview-preload-ethereum-inject.js'),
+      'utf-8'
+    );
+    const served = injectEvent.returnValue;
+    expect(typeof served).toBe('string');
+    expect(served).toContain('window.__FREEDOM_PROVIDER_CONFIG__');
+    expect(served).toContain('"rdns":"baby.freedom.browser"');
+    expect(served).toContain('"name":"Freedom"');
+    expect(served).toMatch(/"uuid":"[0-9a-f-]{36}"/);
+    expect(served.endsWith(expectedSource)).toBe(true);
+
+    // A second call must mint a fresh UUID (spec: unique per provider session).
+    const secondEvent = {};
+    ctx.ipcMain.emit(IPC.GET_ETHEREUM_INJECT_SOURCE, secondEvent);
+    const uuid1 = served.match(/"uuid":"([^"]+)"/)[1];
+    const uuid2 = secondEvent.returnValue.match(/"uuid":"([^"]+)"/)[1];
+    expect(uuid1).not.toBe(uuid2);
 
     await ctx.ipcMain.handlers.get(IPC.OPEN_URL_IN_NEW_TAB)(event, 'https://open.example');
     expect(hostWebContents.send).toHaveBeenCalledWith('tab:new-with-url', 'https://open.example');
