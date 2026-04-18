@@ -1,3 +1,4 @@
+const fs = require('fs');
 const log = require('./logger');
 const { ipcMain, app, dialog, clipboard, nativeImage } = require('electron');
 const { URL } = require('url');
@@ -13,6 +14,13 @@ const webviewPreloadPath = path.join(__dirname, 'webview-preload.js');
 
 // Canonical internal-pages list (shared with preloads via sync IPC)
 const internalPages = require('../shared/internal-pages.json');
+
+// Ethereum provider injection source, read once and shared with webview preloads
+// over sync IPC. The preload is sandboxed and cannot `require('fs')` itself.
+const ethereumInjectSource = fs.readFileSync(
+  path.join(__dirname, 'webview-preload-ethereum-inject.js'),
+  'utf-8'
+);
 
 const isAllowedBaseUrl = (value) => {
   if (!value) return false;
@@ -200,6 +208,10 @@ function registerBaseIpcHandlers(callbacks = {}) {
   // Sync handler: preloads use sendSync to get internal pages at load time
   ipcMain.on(IPC.GET_INTERNAL_PAGES, (event) => {
     event.returnValue = internalPages;
+  });
+
+  ipcMain.on(IPC.GET_ETHEREUM_INJECT_SOURCE, (event) => {
+    event.returnValue = ethereumInjectSource;
   });
 
   ipcMain.handle(IPC.OPEN_URL_IN_NEW_TAB, (event, url) => {

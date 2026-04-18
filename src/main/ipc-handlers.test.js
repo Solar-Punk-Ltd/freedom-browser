@@ -1,3 +1,4 @@
+const fs = require('fs');
 const path = require('path');
 const internalPages = require('../shared/internal-pages.json');
 const IPC = require('../shared/ipc-channels');
@@ -237,6 +238,14 @@ describe('ipc-handlers', () => {
     const internalPagesEvent = {};
     ctx.ipcMain.emit(IPC.GET_INTERNAL_PAGES, internalPagesEvent);
     expect(internalPagesEvent.returnValue).toEqual(internalPages);
+
+    const injectEvent = {};
+    ctx.ipcMain.emit(IPC.GET_ETHEREUM_INJECT_SOURCE, injectEvent);
+    const expectedSource = fs.readFileSync(
+      path.join(__dirname, 'webview-preload-ethereum-inject.js'),
+      'utf-8'
+    );
+    expect(injectEvent.returnValue).toBe(expectedSource);
 
     await ctx.ipcMain.handlers.get(IPC.OPEN_URL_IN_NEW_TAB)(event, 'https://open.example');
     expect(hostWebContents.send).toHaveBeenCalledWith('tab:new-with-url', 'https://open.example');

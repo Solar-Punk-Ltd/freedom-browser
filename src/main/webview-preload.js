@@ -6,17 +6,13 @@
  * - Handles context menu for all pages
  */
 
-const fs = require('fs');
-const path = require('path');
 const { contextBridge, ipcRenderer } = require('electron');
 
-// Provider injection sources (read once at module load).
-// These files are read as text and injected into the page as <script> bodies;
-// keeping them in their own files lets them be unit-tested in isolation.
-const ETHEREUM_INJECT_SOURCE = fs.readFileSync(
-  path.join(__dirname, 'webview-preload-ethereum-inject.js'),
-  'utf-8'
-);
+// The webview preload runs in a sandbox — require() is restricted to a small
+// whitelist (electron, events, timers, url), so we cannot read provider
+// injection sources from disk here. The main process reads them and serves
+// the content over sync IPC.
+const ETHEREUM_INJECT_SOURCE = ipcRenderer.sendSync('internal:get-ethereum-inject-source');
 
 // Internal pages list — canonical source is src/shared/internal-pages.json,
 // served by the main process via sync IPC so preloads don't need require().
