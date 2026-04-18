@@ -9,12 +9,19 @@ const SOURCE = fs.readFileSync(
 // Compile the IIFE source once and re-invoke it per test with a fresh window.
 const installProvider = new Function('window', SOURCE);
 
+const DEFAULT_PROVIDER_CONFIG = Object.freeze({
+  uuid: '11111111-1111-4111-8111-111111111111',
+  name: 'Freedom',
+  icon: 'data:image/png;base64,AAAA',
+  rdns: 'baby.freedom.browser',
+});
+
 /**
  * The injection source runs in a page realm and expects a `window` global.
  * Evaluate it against a stub window so we can assert on side effects
  * (window.ethereum shape, postMessage payloads, dispatched events).
  */
-function createInstance() {
+function createInstance({ providerConfig = DEFAULT_PROVIDER_CONFIG } = {}) {
   const listeners = new Map();
   const postedMessages = [];
   const dispatchedEvents = [];
@@ -39,6 +46,7 @@ function createInstance() {
     postMessage: (data, origin) => {
       postedMessages.push({ data, origin });
     },
+    __FREEDOM_PROVIDER_CONFIG__: providerConfig,
   };
 
   installProvider(fakeWindow);
@@ -302,6 +310,58 @@ describe('webview-preload-ethereum-inject', () => {
 
       expect(a).not.toHaveBeenCalled();
       expect(b).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('EIP-6963 provider announcement', () => {
+    test('dispatches eip6963:announceProvider on install with the seeded info', () => {
+      const { dispatchedEvents } = createInstance();
+      const announcements = dispatchedEvents.filter((e) => e.type === 'eip6963:announceProvider');
+
+      expect(announcements).toHaveLength(1);
+      expect(announcements[0].detail.info).toMatchObject({
+        uuid: DEFAULT_PROVIDER_CONFIG.uuid,
+        name: 'Freedom',
+        rdns: 'baby.freedom.browser',
+      });
+      expect(announcements[0].detail.info.icon).toMatch(/^data:image\/png;base64,/);
+    });
+
+    test('re-announces in response to eip6963:requestProvider', () => {
+      const { window, dispatchedEvents } = createInstance();
+      const countAnnouncements = () =>
+        dispatchedEvents.filter((e) => e.type === 'eip6963:announceProvider').length;
+      const before = countAnnouncements();
+
+      window.dispatchEvent({ type: 'eip6963:requestProvider' });
+
+      expect(countAnnouncements()).toBe(before + 1);
+    });
+
+    test('detail references the live window.ethereum', () => {
+      const { window, dispatchedEvents } = createInstance();
+      const announcement = dispatchedEvents.find((e) => e.type === 'eip6963:announceProvider');
+
+      expect(announcement.detail.provider).toBe(window.ethereum);
+    });
+
+    test('freezes the detail object and its info per spec', () => {
+      const { dispatchedEvents } = createInstance();
+      const detail = dispatchedEvents.find((e) => e.type === 'eip6963:announceProvider').detail;
+
+      expect(Object.isFrozen(detail)).toBe(true);
+      expect(Object.isFrozen(detail.info)).toBe(true);
+    });
+
+    test('clears the config global after consuming it', () => {
+      const { window } = createInstance();
+      expect(window.__FREEDOM_PROVIDER_CONFIG__).toBeUndefined();
+    });
+
+    test('throws if the provider config is missing', () => {
+      expect(() => createInstance({ providerConfig: null })).toThrow(
+        /provider config missing/
+      );
     });
   });
 

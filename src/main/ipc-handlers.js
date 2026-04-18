@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const fs = require('fs');
 const log = require('./logger');
 const { ipcMain, app, dialog, clipboard, nativeImage } = require('electron');
@@ -21,6 +22,19 @@ const ethereumInjectSource = fs.readFileSync(
   path.join(__dirname, 'webview-preload-ethereum-inject.js'),
   'utf-8'
 );
+
+// EIP-6963 ProviderInfo static fields. Icon is a 96×96 PNG base64-encoded
+// (spec recommends square, 96×96 minimum, and requires an RFC-2397 data URI).
+// Name and rdns pulled from package.json so a rebrand updates in one place.
+const ethereumProviderIconPath = app.isPackaged
+  ? path.join(process.resourcesPath, 'assets', 'icon-6963.png')
+  : path.join(__dirname, '..', '..', 'assets', 'icon-6963.png');
+const pkg = require('../../package.json');
+const ethereumProviderInfoStatic = Object.freeze({
+  name: pkg.build.productName,
+  icon: 'data:image/png;base64,' + fs.readFileSync(ethereumProviderIconPath, 'base64'),
+  rdns: pkg.build.appId,
+});
 
 const isAllowedBaseUrl = (value) => {
   if (!value) return false;
@@ -211,7 +225,11 @@ function registerBaseIpcHandlers(callbacks = {}) {
   });
 
   ipcMain.on(IPC.GET_ETHEREUM_INJECT_SOURCE, (event) => {
-    event.returnValue = ethereumInjectSource;
+    // Fresh UUID per request — spec says unique per EIP-1193 session, scoped
+    // to a page's lifetime. Prepend as a global the IIFE picks up.
+    const info = { ...ethereumProviderInfoStatic, uuid: crypto.randomUUID() };
+    const preamble = `window.__FREEDOM_PROVIDER_CONFIG__ = ${JSON.stringify(info)};\n`;
+    event.returnValue = preamble + ethereumInjectSource;
   });
 
   ipcMain.handle(IPC.OPEN_URL_IN_NEW_TAB, (event, url) => {

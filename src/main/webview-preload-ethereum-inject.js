@@ -152,5 +152,28 @@
     }
   });
 
+  // EIP-6963: announce this provider to dapps that listen for multi-wallet
+  // discovery. Config (uuid, name, icon, rdns) is seeded by the main process
+  // via a __FREEDOM_PROVIDER_CONFIG__ preamble prepended to this source.
+  // Fail loud if it's missing — a silent announce with info:{} would violate
+  // the spec's required fields and break dapp wallet pickers.
+  const providerConfig = window.__FREEDOM_PROVIDER_CONFIG__;
+  delete window.__FREEDOM_PROVIDER_CONFIG__;
+  if (!providerConfig) {
+    throw new Error('[ethereum] EIP-6963 provider config missing — preamble not prepended');
+  }
+  const providerDetail = Object.freeze({
+    info: Object.freeze({ ...providerConfig }),
+    provider: window.ethereum,
+  });
+  function announceProvider() {
+    window.dispatchEvent(
+      new CustomEvent('eip6963:announceProvider', { detail: providerDetail })
+    );
+  }
+  window.addEventListener('eip6963:requestProvider', announceProvider);
+  announceProvider();
+
+  // Legacy signal — some older dapps still wait for this.
   window.dispatchEvent(new Event('ethereum#initialized'));
 })();
