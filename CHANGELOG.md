@@ -32,6 +32,7 @@ All notable changes to Freedom will be documented in this file.
 - ENS resolution uses the Universal Resolver: 3–4× fewer RPC round-trips on cold-cache `.eth` / `.box` navigation; names normalized per ENSIP-15
 - Settings moved from a modal to a full `freedom://settings` page
 - Toolbar icons, nodes menu, and experimental settings polished for consistency
+- Updated bundled nodes: Bee 2.7.0 → 2.7.1, Kubo 0.39.0 → 0.40.1, Radicle 1.6.1 → 1.8.0 (rad-httpd 0.23.0 → 0.24.0)
 - Upgraded Electron to 41; all other dependencies refreshed to latest
 
 ### Fixed
