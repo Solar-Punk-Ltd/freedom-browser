@@ -8,6 +8,7 @@ Use these files on demand:
 - `code-style-and-linting.md`: lint-aware implementation workflow.
 - `commit-messages.md`: commit title/body conventions.
 - `changelog-process.md`: release changelog procedure.
+- `release-process.md`: release branch, version bump, tag, build, and publish steps.
 - `security-checklist.md`: pre-commit and pre-PR security checks.
 
 Keep `AGENTS.md` short and stable. Put detailed examples and process notes here.
