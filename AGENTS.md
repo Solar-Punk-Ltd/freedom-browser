@@ -21,6 +21,7 @@ Before executing task-specific work, read the corresponding playbook:
 - Architecture-sensitive changes *(adding files to `src/main/` or `src/renderer/`, creating new IPC channels, moving logic between processes)*: `docs/agent-playbooks/architecture-boundaries.md`
 - Commit message conventions *(any git commit)*: `docs/agent-playbooks/commit-messages.md`
 - Changelog updates *(version bumps, release prep)*: `docs/agent-playbooks/changelog-process.md`
+- Cutting a release *(release branch, version bump, tag, build, publish)*: `docs/agent-playbooks/release-process.md`
 - Security checklist *(before commit or PR)*: `docs/agent-playbooks/security-checklist.md`
 
 If multiple categories apply, read all relevant playbooks.
