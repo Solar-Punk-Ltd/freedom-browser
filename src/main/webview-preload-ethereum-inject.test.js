@@ -450,4 +450,107 @@ describe('webview-preload-ethereum-inject', () => {
       expect(callback).toHaveBeenCalledWith(expect.objectContaining({ message: 'oops' }), null);
     });
   });
+
+  // Integration test: drive the main-process IPC handler end-to-end, evaluate
+  // the full served string (preamble + source) in a fake window, and assert the
+  // EIP-6963 announcement carries info sourced from package.json. Catches
+  // preamble/source concat bugs (missing newline, escaping, shape mismatches)
+  // that neither half-unit test sees in isolation.
+  describe('integration with GET_ETHEREUM_INJECT_SOURCE handler', () => {
+    function createFakeWindow({ seedConfig = true } = {}) {
+      const listeners = new Map();
+      const dispatchedEvents = [];
+      const fakeWindow = {
+        addEventListener: (type, handler) => {
+          if (!listeners.has(type)) listeners.set(type, []);
+          listeners.get(type).push(handler);
+        },
+        removeEventListener: () => {},
+        dispatchEvent: (event) => {
+          dispatchedEvents.push(event);
+          const arr = listeners.get(event.type);
+          if (arr) arr.forEach((h) => h(event));
+          return true;
+        },
+        postMessage: () => {},
+      };
+      // Intentionally NOT seeding __FREEDOM_PROVIDER_CONFIG__ — the served
+      // source's preamble sets it. seedConfig:false lets tests verify the
+      // preamble is what puts the config on window.
+      if (seedConfig) fakeWindow.__FREEDOM_PROVIDER_CONFIG__ = null;
+      return { fakeWindow, dispatchedEvents };
+    }
+
+    function getServedSource() {
+      const {
+        createIpcMainMock,
+        loadMainModule,
+      } = require('../../test/helpers/main-process-test-utils');
+      const IPC = require('../shared/ipc-channels');
+
+      const ipcMain = createIpcMainMock();
+      const { mod } = loadMainModule(require.resolve('./ipc-handlers'), {
+        ipcMain,
+        dialog: { showSaveDialog: jest.fn() },
+        clipboard: { writeText: jest.fn(), writeImage: jest.fn() },
+        nativeImage: { createFromBuffer: jest.fn(() => ({ isEmpty: () => false })) },
+        extraMocks: {
+          [require.resolve('./logger')]: () => ({
+            info: jest.fn(),
+            warn: jest.fn(),
+            error: jest.fn(),
+          }),
+          [require.resolve('./settings-store')]: () => ({
+            loadSettings: () => ({ enableRadicleIntegration: false }),
+          }),
+          [require.resolve('./http-fetch')]: () => ({
+            fetchBuffer: jest.fn(),
+            fetchToFile: jest.fn(),
+          }),
+        },
+      });
+      mod.registerBaseIpcHandlers();
+      const event = {};
+      ipcMain.emit(IPC.GET_ETHEREUM_INJECT_SOURCE, event);
+      return event.returnValue;
+    }
+
+    test('served source evaluates and announces with info from package.json', () => {
+      const pkg = require('../../package.json');
+      const served = getServedSource();
+      const { fakeWindow, dispatchedEvents } = createFakeWindow({ seedConfig: false });
+
+      new Function('window', served)(fakeWindow);
+
+      const announcements = dispatchedEvents.filter(
+        (e) => e.type === 'eip6963:announceProvider'
+      );
+      expect(announcements).toHaveLength(1);
+      expect(announcements[0].detail.info).toMatchObject({
+        name: pkg.build.productName,
+        rdns: pkg.build.appId,
+      });
+      expect(announcements[0].detail.info.uuid).toMatch(/^[0-9a-f-]{36}$/);
+      expect(announcements[0].detail.info.icon).toMatch(/^data:image\/png;base64,/);
+    });
+
+    test('served source leaves window.ethereum installed and fires legacy init', () => {
+      const served = getServedSource();
+      const { fakeWindow, dispatchedEvents } = createFakeWindow({ seedConfig: false });
+
+      new Function('window', served)(fakeWindow);
+
+      expect(fakeWindow.ethereum).toBeDefined();
+      expect(fakeWindow.ethereum.isMetaMask).toBe(true);
+      expect(dispatchedEvents.some((e) => e.type === 'ethereum#initialized')).toBe(true);
+    });
+
+    test('consecutive served sources mint fresh UUIDs', () => {
+      const first = getServedSource();
+      const second = getServedSource();
+      const uuid1 = first.match(/"uuid":"([^"]+)"/)[1];
+      const uuid2 = second.match(/"uuid":"([^"]+)"/)[1];
+      expect(uuid1).not.toBe(uuid2);
+    });
+  });
 });
