@@ -119,14 +119,6 @@
   background: rgba(0, 0, 0, 0.08);
 }
 
-[data-theme='light'] .bee-menu-button .net-line {
-  stroke: #1d1d1f !important;
-}
-
-[data-theme='light'] .bee-menu-button .net-node {
-  stroke: #1d1d1f !important;
-}
-
 [data-theme='light'] .bee-toggle-knob,
 [data-theme='light'] .ipfs-toggle-knob,
 [data-theme='light'] .radicle-toggle-knob {
