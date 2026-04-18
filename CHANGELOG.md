@@ -14,10 +14,15 @@ All notable changes to Freedom will be documented in this file.
 - Wallet send: recipient field now accepts ENS names (`.eth`, `.box`, subdomains). The name is resolved to its `addr` record on mainnet when you press Continue, and the review screen shows both the name and the resolved address so you can verify before confirming.
 - Wallet send screen now honors the chain selected on the main wallet view instead of defaulting to the first chain with a balance.
 - ENS resolution now uses the Universal Resolver in a single RPC call for both content-hash and addr lookups. Cold-cache address-bar navigation to `.eth` / `.box` names is 3–4× fewer RPC round-trips (3 → 1 for direct names, 4 → 1 for wildcard-resolved names like `.box` via 3DNS). Same behavior and cache, just faster.
+- Upgraded Electron to 41; all other dependencies refreshed to latest.
 
 ### Fixed
 
 - dApp-connect wallet picker dropdown no longer shows through to the content below (had an undefined CSS variable in both themes).
+
+### Developer notes
+
+- After pulling this update onto an existing checkout, run `npx electron-builder install-app-deps` to rebuild `better-sqlite3` against Electron 41. Fresh `npm ci` installs do this automatically.
 
 ## [0.6.2] - 2026-03-01
 
