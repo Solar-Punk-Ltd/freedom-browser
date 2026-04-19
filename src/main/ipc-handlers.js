@@ -25,11 +25,13 @@ const ethereumInjectSource = fs.readFileSync(
 
 // EIP-6963 ProviderInfo static fields. Icon is a 96×96 PNG base64-encoded
 // (spec recommends square, 96×96 minimum, and requires an RFC-2397 data URI).
-// Name and rdns pulled from package.json so a rebrand updates in one place.
+// Name and rdns come from src/shared/brand.json. We cannot read them from
+// package.json at runtime because electron-builder strips the `build` section
+// (which holds productName and appId) from the packaged package.json.
 const ethereumProviderIconPath = app.isPackaged
   ? path.join(process.resourcesPath, 'assets', 'icon-6963.png')
   : path.join(__dirname, '..', '..', 'assets', 'icon-6963.png');
-const pkg = require('../../package.json');
+const brand = require('../shared/brand.json');
 // Read the icon defensively: a missing/corrupt file must not block main-process
 // startup. Fall back to an empty icon and let the 6963 announcement still fire.
 let ethereumProviderIconDataUri = '';
@@ -40,11 +42,11 @@ try {
   log.error('[eip6963] Failed to load provider icon:', err.message);
 }
 const ethereumProviderInfoStatic = Object.freeze({
-  name: pkg.build.productName,
+  name: brand.productName,
   icon: ethereumProviderIconDataUri,
-  // rdns is EIP-6963's "reverse-DNS" identifier; build.appId (baby.freedom.browser)
+  // rdns is EIP-6963's "reverse-DNS" identifier; brand.appId (baby.freedom.browser)
   // is already valid reverse-DNS of freedom.baby, so we reuse it.
-  rdns: pkg.build.appId,
+  rdns: brand.appId,
 });
 
 const isAllowedBaseUrl = (value) => {
