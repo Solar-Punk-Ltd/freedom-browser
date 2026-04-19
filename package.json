@@ -1,6 +1,6 @@
 {
   "name": "freedom-browser",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "license": "MPL-2.0",
   "description": "Freedom – A browser for the decentralized web, with Swarm, IPFS, and ENS as first-class protocols.",
   "author": {
@@ -187,6 +187,11 @@
     "ethers": "^6.16.0",
     "micro-key-producer": "^0.8.2",
     "qrcode": "^1.5.4"
+  },
+  "overrides": {
+    "@ethersphere/bee-js": {
+      "axios": "^0.31.0"
+    }
   },
   "title": "Freedom",
   "displayName": "Freedom"

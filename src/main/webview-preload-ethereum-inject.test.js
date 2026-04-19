@@ -500,8 +500,8 @@ describe('webview-preload-ethereum-inject', () => {
       return event.returnValue;
     }
 
-    test('served source evaluates and announces with info from package.json', () => {
-      const pkg = require('../../package.json');
+    test('served source evaluates and announces with info from brand.json', () => {
+      const brand = require('../shared/brand.json');
       const served = getServedSource();
       const { fakeWindow, dispatchedEvents } = createFakeWindow({ seedConfig: false });
 
@@ -512,8 +512,8 @@ describe('webview-preload-ethereum-inject', () => {
       );
       expect(announcements).toHaveLength(1);
       expect(announcements[0].detail.info).toMatchObject({
-        name: pkg.build.productName,
-        rdns: pkg.build.appId,
+        name: brand.productName,
+        rdns: brand.appId,
       });
       expect(announcements[0].detail.info.uuid).toMatch(/^[0-9a-f-]{36}$/);
       expect(announcements[0].detail.info.icon).toMatch(/^data:image\/png;base64,/);
