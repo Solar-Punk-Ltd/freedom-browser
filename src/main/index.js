@@ -6,10 +6,18 @@ const appName = process.platform === 'linux' ? 'freedom' : 'Freedom';
 // and other browser features treat bzz://, ipfs://, and ipns:// as valid fetch
 // schemes. Without this, only XMLHttpRequest works (it bypasses scheme validation);
 // fetch() rejects unknown schemes before webRequest.onBeforeRequest can intercept them.
+const privileges = {
+  standard: true,
+  secure: true,
+  supportFetchAPI: true,
+  corsEnabled: true,
+  allowServiceWorkers: true,
+};
 protocol.registerSchemesAsPrivileged([
-  { scheme: 'bzz',  privileges: { standard: true, supportFetchAPI: true } },
-  { scheme: 'ipfs', privileges: { standard: true, supportFetchAPI: true } },
-  { scheme: 'ipns', privileges: { standard: true, supportFetchAPI: true } },
+  { scheme: 'bzz',  privileges: privileges },
+  { scheme: 'ipfs', privileges: privileges },
+  { scheme: 'ipns', privileges: privileges },
+  { scheme: 'rad',  privileges: privileges },
 ]);
 
 // Suppress Electron security warnings in development (CSP handles security in production)
